@@ -1,0 +1,98 @@
+{
+  "vehicles": [
+    {
+      "make": "Hyundai", "model": "Tucson Hybrid", "cargurus_id": "d3141",
+      "cargurus_search_path": "m28,m28/d3141,m28/d3141/SEL Convenience AWD,m28/d3141/Limited AWD",
+      "trims": ["SEL Convenience", "N Line", "Limited"],
+      "min_year": 2025, "trim_max_year": {"N Line": 2025},
+      "msrp": {
+        "2025": { "SEL": 33450, "SEL Convenience": 36465, "N Line": 38215, "Limited": 41295 },
+        "2026": { "SEL Convenience": 34650, "Limited": 43675 }
+      }
+    },
+    {
+      "make": "Kia", "model": "Sportage Hybrid", "cargurus_id": "d3239",
+      "cargurus_search_path": "m33,m33/d3239,m33/d3239/EX AWD,m33/d3239/SX-Prestige AWD,m33/d3239/X-Line AWD",
+      "trims": ["EX", "X-Line", "SX Prestige"], "min_year": 2026,
+      "msrp": {
+        "2026": { "EX": 34990, "SX Prestige": 42055 }
+      }
+    },
+    {
+      "make": "Volkswagen", "model": "Tiguan", "cargurus_id": "d1104",
+      "cargurus_search_path": "m55/d1104,m55,m55/d1104/SE R-Line Black 4Motion,m55/d1104/SE R-Line Black FWD,m55/d1104/SEL R-Line 4Motion,m55/d1104/SEL R-Line Turbo 4Motion",
+      "trims": ["SEL R-Line", "SE R-Line Black"],
+      "min_year": 2025,
+      "msrp": {
+        "2025": { "SE": 32295, "SE R-Line Black": 35455, "SEL R-Line": 41180 },
+        "2026": { "SE": 35080, "SE R-Line Black": 38240, "SEL R-Line": 44560 }
+      }
+    },
+    {
+      "make": "Buick", "model": "Envision", "cargurus_id": "d2398",
+      "cargurus_search_path": "m21/d2398,m21",
+      "trims": ["Preferred", "Sport Touring", "Avenir"],
+      "min_year": 2024, "max_year": 2025,
+      "msrp": {
+        "2024": { "Preferred": 38195, "Sport Touring": 42595, "Avenir": 46495 },
+        "2025": { "Preferred": 38995, "Sport Touring": 43195, "Avenir": 47195 }
+      }
+    },
+    {
+      "make": "BMW", "model": "X1", "cargurus_id": "d2160",
+      "cargurus_search_path": "m3,m3/d2160,m3/d2160/xDrive28i AWD,m3/d2160/xDrive28i",
+      "trims": ["xDrive28i"],
+      "min_year": 2023, "max_year": 2025,
+      "msrp": {
+        "2023": { "sDrive28i": 39100, "xDrive28i": 41100, "M35i": 51200 },
+        "2024": { "xDrive28i": 42000, "M35i": 52000 },
+        "2025": { "xDrive28i": 40950, "M35i": 50350 }
+      }
+    },
+    {
+      "make": "BMW", "model": "X3", "cargurus_id": "d392",
+      "cargurus_search_path": "m3/d392/xDrive30i AWD,m3/d392/sDrive30i RWD,m3,m3/d392",
+      "trims": ["sDrive30i", "xDrive30i"],
+      "min_year": 2023, "max_year": 2025,
+      "trim_max_year": { "sDrive30i": 2024 },
+      "msrp": {
+        "2023": { "sDrive30i": 46400, "xDrive30i": 48400, "M40i": 62900 },
+        "2024": { "sDrive30i": 48000, "xDrive30i": 50000, "M40i": 64500 },
+        "2025": { "xDrive30i": 51500 }
+      }
+    },
+    {
+      "make": "Volvo", "model": "XC40", "cargurus_id": "d2624",
+      "cargurus_search_path": "m56/d2624/B5 Plus Bright Theme AWD,m56/d2624/B5 Plus Dark Theme AWD,m56/d2624/B5 Ultimate Bright Theme AWD,m56/d2624/B5 Ultimate Dark Theme AWD,m56/d2624/B4 Plus Bright Theme FWD,m56/d2624/B4 Plus Dark Theme FWD,m56/d2624/B4 Ultimate Bright Theme FWD,m56/d2624/B4 Ultimate Dark Theme FWD,m56,m56/d2624",
+      "trims": ["Plus", "Ultimate"],
+      "min_year": 2023,
+      "msrp": {
+        "2023": { "Plus": 43295, "Ultimate": 48295 },
+        "2024": { "Plus": 44295, "Ultimate": 49295 },
+        "2025": { "Plus": 45295, "Ultimate": 50295 }
+      }
+    },
+    {
+      "make": "Volvo", "model": "XC60", "cargurus_id": "d1629",
+      "cargurus_search_path": "m56/d1629/B5 Plus Bright Theme AWD,m56/d1629/B5 Plus Dark Theme AWD,m56/d1629/B5 Ultimate Bright Theme AWD,m56/d1629/B5 Ultimate Dark Theme AWD,m56/d1629/Recharge T8 Plus Dark Theme eAWD,m56/d1629/Recharge T8 Plus Bright Theme eAWD,m56/d1629/Recharge T8 Ultimate Dark Theme eAWD,m56/d1629/Recharge T8 Ultimate Bright Theme eAWD,m56,m56/d1629",
+      "trims": ["Plus", "Ultimate"],
+      "min_year": 2023,
+      "msrp": {
+        "2023": { "Plus": 47045, "Ultimate": 55045 },
+        "2024": { "Plus": 48045, "Ultimate": 56045 },
+        "2025": { "Plus": 49045, "Ultimate": 57045 }
+      }
+    },
+    {
+      "make": "Lexus", "model": "NX 350h", "cargurus_id": "d2294",
+      "cargurus_search_path": "m37,m37/d2294,m37/d2294/350h Premium AWD,m37/d2294/350h Luxury AWD,m37/d2294/350h Signature AWD",
+      "trims": ["Premium", "Luxury", "F SPORT"],
+      "min_year": 2022, "max_year": 2024,
+      "msrp": {
+        "2022": { "Premium": 44785, "Luxury": 49985, "F SPORT Handling": 48550 },
+        "2023": { "Premium": 46815, "Luxury": 51985, "F SPORT Handling": 50650 },
+        "2024": { "Premium": 49185, "Luxury": 54355, "F SPORT Handling": 53020 }
+      }
+    }
+  ]
+}
