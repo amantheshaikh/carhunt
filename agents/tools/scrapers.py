@@ -903,7 +903,7 @@ def _parse_history(text: str) -> dict:
 _ENRICH_CONCURRENCY  = 3   # parallel detail-page fetches per browser session
 _ENRICH_TIMEOUT      = 600  # hard cap on the whole enrichment batch (10 min)
 _CARSCOM_PAGE_SIZE   = 24  # Cars.com shows 24 listings per page
-_CARSCOM_MAX_PAGES   = 10  # cap at 240 listings per run
+_CARSCOM_MAX_PAGES   = 25  # cap at 600 listings per run (all 9 models combined)
 
 
 def _extract_insights_llm(text: str) -> dict:
