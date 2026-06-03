@@ -51,13 +51,14 @@ _TRIM_LEVELS: dict[str, dict[str, int]] = {
     "tucson hybrid":    {"blue": 1, "sel": 2, "sel convenience": 3, "n line": 4, "limited": 5, "sel n-line": 4},
     "sportage":         {"lx": 1, "ex": 2, "sx": 3, "sx prestige": 4, "x-line": 4, "x-pro": 5, "x-pro prestige": 6, "prestige": 4},
     "sportage hybrid":  {"lx": 1, "ex": 2, "sx": 3, "sx prestige": 4, "x-line": 4, "x-pro": 5, "x-pro prestige": 6, "prestige": 4},
-    "tiguan":           {"s": 1, "se": 2, "se r-line": 3, "se r-line black": 3, "sel": 4, "sel premium": 5, "sel r-line black": 5},
+    "tiguan":           {"s": 1, "se": 2, "se r-line": 3, "se r-line black": 4, "sel": 4, "sel premium": 5, "sel r-line black": 5},
     "envision":         {"preferred": 1, "sport touring": 2, "avenir": 3},
     "x1":               {"sdrive28i": 1, "xdrive28i": 2},
     "x3":               {"sdrive30i": 1, "xdrive30i": 2},
     "nx 350h":          {"premium": 2, "luxury": 3, "f sport": 3},
     "xc40":             {"core": 1, "plus": 2, "ultimate": 3},
     "xc60":             {"core": 1, "plus": 2, "ultimate": 3},
+    "xc60 recharge":   {"core": 1, "plus": 2, "ultimate": 3},
 }
 
 _ALL_MODELS = list(_TRIM_LEVELS.keys())
@@ -66,7 +67,7 @@ _ALL_MODELS = list(_TRIM_LEVELS.keys())
 # warrant separate pkl files.  train() produces {slug}_gas.pkl + {slug}_phev.pkl
 # in addition to the combined {slug}.pkl (kept as fallback).
 # predict_fair_price() detects powertrain and selects the right sub-model.
-_POWERTRAIN_SPLIT: set[str] = {"xc60"}
+_POWERTRAIN_SPLIT: set[str] = set()  # XC60 gas/PHEV are now fully separate model entries
 
 
 def _split_pkl_path(model: str, powertrain: str) -> str:
@@ -126,6 +127,7 @@ _DRIVETRAIN_DEFAULTS: dict[tuple[str, str, int], str] = {
     ("bmw",     "x1",              2023): "awd",  # 2023–2025 X1 only has xDrive28i (M35i excluded)
     ("bmw",     "x3",              2025): "awd",  # 2025 X3 only has xDrive30i
     ("volvo",   "xc60",            2023): "awd",  # XC60 B5/B6/T8 all AWD
+    ("volvo",   "xc60 recharge",  2023): "awd",  # XC60 Recharge T8 eAWD
     # XC40: B4 can be FWD, B5 is AWD — detect from trim text, no default override
 }
 
@@ -203,6 +205,7 @@ _PLATFORM_MIN_YEAR: dict[str, int] = {
     "nx 350h":         2022,  # TNGA-K gen launched 2022; prior NX hybrids are different generation
     "xc40":            2023,  # CMA platform refresh; 2022 and earlier is a different gen
     "xc60":            2023,  # SPA platform refresh for 2023+
+    "xc60 recharge":   2023,  # Recharge T8 PHEV also on SPA refresh platform
 }
 
 

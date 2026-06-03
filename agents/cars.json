@@ -21,7 +21,7 @@
     {
       "make": "Volkswagen", "model": "Tiguan", "cargurus_id": "d1104",
       "cargurus_search_path": "m55/d1104,m55,m55/d1104/SE R-Line Black 4Motion,m55/d1104/SE R-Line Black FWD,m55/d1104/SEL R-Line 4Motion,m55/d1104/SEL R-Line Turbo 4Motion",
-      "trims": ["SEL R-Line", "SE R-Line Black"],
+      "trims": ["SE", "SEL R-Line", "SE R-Line Black"],
       "min_year": 2025,
       "msrp": {
         "2025": { "SE": 32295, "SE R-Line Black": 35455, "SEL R-Line": 41180 },
@@ -74,13 +74,24 @@
     },
     {
       "make": "Volvo", "model": "XC60", "cargurus_id": "d1629",
-      "cargurus_search_path": "m56/d1629/B5 Plus Bright Theme AWD,m56/d1629/B5 Plus Dark Theme AWD,m56/d1629/B5 Ultimate Bright Theme AWD,m56/d1629/B5 Ultimate Dark Theme AWD,m56/d1629/Recharge T8 Plus Dark Theme eAWD,m56/d1629/Recharge T8 Plus Bright Theme eAWD,m56/d1629/Recharge T8 Ultimate Dark Theme eAWD,m56/d1629/Recharge T8 Ultimate Bright Theme eAWD,m56,m56/d1629",
+      "cargurus_search_path": "m56/d1629/B5 Plus Bright Theme AWD,m56/d1629/B5 Plus Dark Theme AWD,m56/d1629/B5 Ultimate Bright Theme AWD,m56/d1629/B5 Ultimate Dark Theme AWD,m56,m56/d1629",
       "trims": ["Plus", "Ultimate"],
       "min_year": 2023,
       "msrp": {
         "2023": { "Plus": 47045, "Ultimate": 55045 },
         "2024": { "Plus": 48045, "Ultimate": 56045 },
         "2025": { "Plus": 49045, "Ultimate": 57045 }
+      }
+    },
+    {
+      "make": "Volvo", "model": "XC60 Recharge", "cargurus_id": "d1629",
+      "cargurus_search_path": "m56/d1629/Recharge T8 Plus Dark Theme eAWD,m56/d1629/Recharge T8 Plus Bright Theme eAWD,m56/d1629/Recharge T8 Ultimate Dark Theme eAWD,m56/d1629/Recharge T8 Ultimate Bright Theme eAWD,m56,m56/d1629",
+      "trims": ["Plus", "Ultimate"],
+      "min_year": 2023, "max_year": 2025,
+      "msrp": {
+        "2023": { "Plus": 58845, "Ultimate": 66845 },
+        "2024": { "Plus": 59845, "Ultimate": 67845 },
+        "2025": { "Plus": 61845, "Ultimate": 69845 }
       }
     },
     {

@@ -206,6 +206,10 @@ def _is_valid(listing: dict, min_year: int, allowed_makes: list[str],
 def _save_new(listing: dict) -> None:
     # Normalise make/model to canonical casing from cars.json (scrapers use ALL CAPS, title case, etc.)
     mk, mo = listing["make"], listing["model"]
+    # XC60 Recharge T8 PHEV listings share CarGurus model page with gas B5 — split by trim text
+    raw_trim = (listing.get("trim") or "").lower()
+    if mk.lower() == "volvo" and mo.lower() == "xc60" and "recharge" in raw_trim:
+        mo = "XC60 Recharge"
     canonical = _CANONICAL_NAMES.get((mk.lower(), mo.lower()))
     if canonical:
         mk, mo = canonical
