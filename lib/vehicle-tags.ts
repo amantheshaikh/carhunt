@@ -16,7 +16,7 @@ export function getPowertrain(trim: string | null, model: string | null): "PHEV"
 
 // ─── Deal categories ─────────────────────────────────────────────────────────
 
-export type DealCategory = "Exceptional Deal" | "Great Deal" | "Good Deal" | "Fair Price" | null;
+export type DealCategory = "Exceptional Deal" | "Great Deal" | "Good Deal" | "Fair Price" | "Poor Value" | null;
 
 export function getDealCategory(score: number | null): DealCategory {
   if (score == null) return null;
@@ -24,7 +24,7 @@ export function getDealCategory(score: number | null): DealCategory {
   if (score >= 72) return "Great Deal";
   if (score >= 58) return "Good Deal";
   if (score >= 45) return "Fair Price";
-  return null;
+  return "Poor Value";
 }
 
 export function getDealCategoryStyle(score: number | null): string {
@@ -32,7 +32,8 @@ export function getDealCategoryStyle(score: number | null): string {
   if (score >= 88) return "bg-emerald-900 text-emerald-300 border border-emerald-700";
   if (score >= 72) return "bg-green-900 text-green-300 border border-green-700";
   if (score >= 58) return "bg-blue-900 text-blue-300 border border-blue-700";
-  return "bg-zinc-800 text-zinc-400 border border-zinc-700";
+  if (score >= 45) return "bg-zinc-800 text-zinc-400 border border-zinc-700";
+  return "bg-red-950 text-red-400 border border-red-900";
 }
 
 /** Lower-case tag for filter comparisons (matches Filters.drivetrain type). */
