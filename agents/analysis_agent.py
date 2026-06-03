@@ -18,9 +18,7 @@ from tools.scoring import score_listing
 def run() -> dict:
     rows = fetch_all(
         """SELECT l.* FROM listings l
-           LEFT JOIN listing_scores ls ON ls.listing_id = l.id
-           WHERE (ls.listing_id IS NULL OR l.status = 'new')
-           AND l.status IN ('new', 'active', 'contacted')
+           WHERE l.status IN ('new', 'active', 'contacted')
            ORDER BY l.first_seen_at DESC"""
     )
 
