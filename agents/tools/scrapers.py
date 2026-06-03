@@ -649,14 +649,16 @@ async def _scrape_cargurus_search_all_async(
                             return { text: el.innerText || '', href: link ? link.href : '' };
                         })
                     """)
+                    new_on_page = 0
                     for tile in tiles:
                         parsed = _parse_cargurus_blade(tile["text"], tile["href"], "suv", model, make)
                         if parsed and parsed["external_id"] not in seen_ids:
                             seen_ids.add(parsed["external_id"])
                             listings.append(parsed)
+                            new_on_page += 1
                     if page_size is None:
                         page_size = len(tiles) or 1
-                    if len(tiles) < page_size or page_num == 100:
+                    if len(tiles) < page_size or new_on_page == 0 or page_num == 100:
                         break
                 print(f"    [cargurus/{model}] {len(listings)} listings")
             except Exception as e:
