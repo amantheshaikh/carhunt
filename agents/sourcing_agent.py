@@ -20,6 +20,7 @@ from dotenv import load_dotenv
 
 load_dotenv(os.path.join(os.path.dirname(__file__), "..", ".env.local"))
 
+from psycopg2.errors import UniqueViolation
 from tools.db import fetch_one, fetch_all, execute, get_conn
 from tools.scrapers import (
     scrape_cargurus, scrape_carmax, scrape_carvana,
@@ -215,31 +216,34 @@ def _save_new(listing: dict) -> None:
     # Skip if the VIN is already tracked as an active listing from any source.
     # The WHERE NOT EXISTS handles the common case; the unique index is the hard backstop.
     insights = listing.get("insights")
-    execute(
-        """INSERT INTO listings
-           (source, external_id, vin, make, model, trim, year, body_type, mileage, price,
-            dealer_name, dealer_phone, dealer_email, listing_url, photos_url,
-            title_status, accident_count, condition, status, insights, raw)
-           SELECT %s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,'new',%s,%s
-           WHERE NOT EXISTS (
-               SELECT 1 FROM listings
-               WHERE vin = %s AND vin IS NOT NULL
-               AND status NOT IN ('dismissed', 'purchased')
-           )
-           ON CONFLICT (source, external_id) DO NOTHING""",
-        (
-            listing["source"], str(listing["external_id"]), listing.get("vin"),
-            mk, mo, trim, listing["year"],
-            listing.get("body_type"), listing.get("mileage"), listing["price"],
-            listing.get("dealer_name"), listing.get("dealer_phone"), listing.get("dealer_email"),
-            listing["listing_url"], listing.get("photos_url"),
-            listing.get("title_status"), listing.get("accident_count"),
-            listing.get("condition", "used"),
-            json.dumps(insights) if insights else None,
-            json.dumps(listing.get("raw", {})),
-            listing.get("vin"),  # for the WHERE NOT EXISTS vin check
-        ),
-    )
+    try:
+        execute(
+            """INSERT INTO listings
+               (source, external_id, vin, make, model, trim, year, body_type, mileage, price,
+                dealer_name, dealer_phone, dealer_email, listing_url, photos_url,
+                title_status, accident_count, condition, status, insights, raw)
+               SELECT %s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,'new',%s,%s
+               WHERE NOT EXISTS (
+                   SELECT 1 FROM listings
+                   WHERE vin = %s AND vin IS NOT NULL
+                   AND status NOT IN ('dismissed', 'purchased')
+               )
+               ON CONFLICT (source, external_id) DO NOTHING""",
+            (
+                listing["source"], str(listing["external_id"]), listing.get("vin"),
+                mk, mo, trim, listing["year"],
+                listing.get("body_type"), listing.get("mileage"), listing["price"],
+                listing.get("dealer_name"), listing.get("dealer_phone"), listing.get("dealer_email"),
+                listing["listing_url"], listing.get("photos_url"),
+                listing.get("title_status"), listing.get("accident_count"),
+                listing.get("condition", "used"),
+                json.dumps(insights) if insights else None,
+                json.dumps(listing.get("raw", {})),
+                listing.get("vin"),  # for the WHERE NOT EXISTS vin check
+            ),
+        )
+    except UniqueViolation:
+        pass  # concurrent refresh inserted the same VIN first; unique index caught it
 
 
 def _touch_existing(source: str, external_id: str, new_price: int, old_price: int) -> bool:
