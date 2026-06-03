@@ -21,7 +21,7 @@ def detect_drivetrain(trim: str | None, model: str | None, raw_text: str | None 
 
 def detect_powertrain(trim: str | None, model: str | None, raw_text: str | None = None) -> str:
     text = " ".join(filter(None, [trim, model, raw_text])).lower()
-    if any(k in text for k in ("plug-in", "phev", "plug in hybrid", "recharge")):
+    if any(k in text for k in ("plug-in", "phev", "plug in hybrid", "recharge", " t8 ")):
         return "phev"
     if any(k in text for k in ("hybrid",)):
         return "hybrid"
