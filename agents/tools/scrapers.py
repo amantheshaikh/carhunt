@@ -601,67 +601,82 @@ async def _scrape_cargurus_search_all_async(
     vehicles: list[dict], zip_code: str, min_year: int, max_year: int | None,
     radius: int = 50000, local: bool = False,
 ) -> list[dict]:
-    """Scrape all search-path vehicles in ONE shared browser session."""
-    import urllib.parse as _up
-    delivery    = "false" if local else "true"
+    """Scrape all search-path vehicles with up to 3 parallel browser contexts."""
+    delivery     = "false" if local else "true"
     state_filter = "&shouldFilterByState=true" if local else ""
-    all_listings: list[dict] = []
+    sem = asyncio.Semaphore(3)
+
+    async def _scrape_vehicle(browser, v: dict) -> list[dict]:
+        make    = v["make"]
+        model   = v["model"]
+        path    = v["cargurus_search_path"]
+        eff_min = max(min_year, v.get("min_year", min_year))
+        eff_max = v.get("max_year") or max_year
+        base = (
+            f"https://www.cargurus.com/search?srpVariation=DEFAULT_SEARCH"
+            f"&zip={zip_code}&distance={radius}"
+            f"&makeModelTrimPaths={urllib.parse.quote(path, safe='/')}"
+            f"&isDeliveryEnabled={delivery}&startYear={eff_min}"
+            f"&vehicleHistoryOptions={_CARGURUS_HISTORY_FILTER}"
+            + (f"&endYear={eff_max}" if eff_max else "")
+            + state_filter
+        )
+        listings: list[dict] = []
+        seen_ids: set[str]   = set()
+        page_size: int | None = None
+
+        async with sem:
+            ctx = await browser.new_context(
+                user_agent=random.choice(_UA_POOL),
+                viewport=random.choice(_VIEWPORT_POOL),
+                locale="en-US",
+                timezone_id="America/New_York",
+            )
+            page = await ctx.new_page()
+            try:
+                for page_num in range(1, 101):
+                    url = base + (f"&page={page_num}" if page_num > 1 else "")
+                    await page.goto(url, wait_until="domcontentloaded", timeout=30_000)
+                    await _human_delay(page, 3000, 5000)
+                    await _check_blocked(page, "cargurus")
+                    await _dismiss_cargurus_modal(page)
+                    await page.wait_for_timeout(1000)
+                    await _gradual_scroll(page)
+                    await page.wait_for_timeout(1500)
+                    tiles = await page.evaluate("""() =>
+                        Array.from(document.querySelectorAll('[data-testid="srp-listing-tile"]')).map(el => {
+                            const link = el.querySelector('a[href*="/details/"],a[href*="/vehicledetail/"]');
+                            return { text: el.innerText || '', href: link ? link.href : '' };
+                        })
+                    """)
+                    for tile in tiles:
+                        parsed = _parse_cargurus_blade(tile["text"], tile["href"], "suv", model, make)
+                        if parsed and parsed["external_id"] not in seen_ids:
+                            seen_ids.add(parsed["external_id"])
+                            listings.append(parsed)
+                    if page_size is None:
+                        page_size = len(tiles) or 1
+                    if len(tiles) < page_size or page_num == 100:
+                        break
+                print(f"    [cargurus/{model}] {len(listings)} listings")
+            except Exception as e:
+                print(f"    [cargurus/{model}] error: {e}")
+            finally:
+                await ctx.close()
+
+        return listings
 
     async with Stealth().use_async(async_playwright()) as p:
-        browser, ctx = await _stealth_browser(p)
-        page = await ctx.new_page()
+        browser = await p.chromium.launch(
+            headless=True,
+            args=["--disable-blink-features=AutomationControlled", "--no-sandbox"],
+        )
         try:
-            for v in vehicles:
-                make  = v["make"]
-                model = v["model"]
-                path  = v["cargurus_search_path"]
-                eff_min = max(min_year, v.get("min_year", min_year))
-                eff_max = v.get("max_year") or max_year
-                base = (
-                    f"https://www.cargurus.com/search?srpVariation=DEFAULT_SEARCH"
-                    f"&zip={zip_code}&distance={radius}"
-                    f"&makeModelTrimPaths={_up.quote(path, safe='/')}"
-                    f"&isDeliveryEnabled={delivery}&startYear={eff_min}"
-                    f"&vehicleHistoryOptions={_CARGURUS_HISTORY_FILTER}"
-                    + (f"&endYear={eff_max}" if eff_max else "")
-                    + state_filter
-                )
-                listings: list[dict] = []
-                seen_ids: set[str]   = set()
-                page_size: int | None = None
-                try:
-                    for page_num in range(1, 101):
-                        url = base + (f"&page={page_num}" if page_num > 1 else "")
-                        await page.goto(url, wait_until="domcontentloaded", timeout=30_000)
-                        await _human_delay(page, 3000, 5000)
-                        await _check_blocked(page, "cargurus")
-                        await _dismiss_cargurus_modal(page)
-                        await page.wait_for_timeout(1000)
-                        await _gradual_scroll(page)
-                        await page.wait_for_timeout(1500)
-                        tiles = await page.evaluate("""() =>
-                            Array.from(document.querySelectorAll('[data-testid="srp-listing-tile"]')).map(el => {
-                                const link = el.querySelector('a[href*="/details/"],a[href*="/vehicledetail/"]');
-                                return { text: el.innerText || '', href: link ? link.href : '' };
-                            })
-                        """)
-                        for tile in tiles:
-                            parsed = _parse_cargurus_blade(tile["text"], tile["href"], "suv", model, make)
-                            if parsed and parsed["external_id"] not in seen_ids:
-                                seen_ids.add(parsed["external_id"])
-                                listings.append(parsed)
-                        if page_size is None:
-                            page_size = len(tiles) or 1
-                        if len(tiles) < page_size or page_num == 100:
-                            break
-                    print(f"    [cargurus/{model}] {len(listings)} listings")
-                    all_listings.extend(listings)
-                except Exception as e:
-                    print(f"    [cargurus/{model}] error: {e}")
+            results = await asyncio.gather(*[_scrape_vehicle(browser, v) for v in vehicles])
         finally:
             await browser.close()
 
-    return all_listings
+    return [listing for model_listings in results for listing in model_listings]
 
 async def _scrape_cargurus_search_async(search_path: str, make: str, model: str,
                                          zip_code: str, min_year: int, max_year: int | None,
