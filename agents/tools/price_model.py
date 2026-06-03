@@ -15,6 +15,11 @@ Features (no model identity needed — all training data is the same vehicle):
 
 Saved as: agents/tools/price_model_{model_slug}.pkl
 Falls back to global model if per-model has insufficient data (<30 rows).
+
+Split models: vehicles in _POWERTRAIN_SPLIT (e.g. XC60) also train separate
+price_model_{slug}_gas.pkl and price_model_{slug}_phev.pkl so gas B5 and
+Recharge T8 PHEV depreciation curves don't bleed into each other.
+predict_fair_price() selects the right sub-model based on detected powertrain.
 """
 import os
 from datetime import datetime
@@ -56,6 +61,18 @@ _TRIM_LEVELS: dict[str, dict[str, int]] = {
 }
 
 _ALL_MODELS = list(_TRIM_LEVELS.keys())
+
+# Models where gas and PHEV have sufficiently different depreciation curves to
+# warrant separate pkl files.  train() produces {slug}_gas.pkl + {slug}_phev.pkl
+# in addition to the combined {slug}.pkl (kept as fallback).
+# predict_fair_price() detects powertrain and selects the right sub-model.
+_POWERTRAIN_SPLIT: set[str] = {"xc60"}
+
+
+def _split_pkl_path(model: str, powertrain: str) -> str:
+    """e.g. price_model_xc60_gas.pkl"""
+    pt_slug = "phev" if powertrain in ("phev", "electric", "hybrid") else "gas"
+    return os.path.join(_DIR, f"price_model_{_model_slug(model)}_{pt_slug}.pkl")
 
 
 def _model_slug(model: str) -> str:
@@ -189,17 +206,22 @@ _PLATFORM_MIN_YEAR: dict[str, int] = {
 }
 
 
-def load_training_data_for(model_name: str) -> tuple[list, list]:
+def load_training_data_for(model_name: str, powertrain_filter: str | None = None) -> tuple[list, list]:
     key = model_name.lower()
     platform_min          = _PLATFORM_MIN_YEAR.get(key, 0)
     target_min, target_max = _MODEL_YEAR_RANGE.get(key, (0, None))
     effective_min         = max(platform_min, target_min)
+    # PHEVs can exceed the normal $55k cap (XC60 T8 goes to ~$60k)
+    max_price = 65_000 if powertrain_filter == "phev" else 55_000
 
     # price_training_data: apply per-year P10 floor to cut accident/salvage/lemon tail.
     # Listings table is already accident-filtered by _is_valid() — no P10 needed there.
-    cte_max_yr  = "AND cte.year <= %s" if target_max else ""
-    join_max_yr = "AND ptd.year <= %s" if target_max else ""
+    cte_max_yr   = "AND cte.year <= %s" if target_max else ""
+    join_max_yr  = "AND ptd.year <= %s" if target_max else ""
     max_year_params = [target_max] if target_max else []
+    cte_pt_sql   = "AND cte.powertrain = %s" if powertrain_filter else ""
+    join_pt_sql  = "AND ptd.powertrain = %s" if powertrain_filter else ""
+    pt_params    = [powertrain_filter] if powertrain_filter else []
 
     train_rows = fetch_all(f"""
         WITH price_floors AS (
@@ -207,23 +229,25 @@ def load_training_data_for(model_name: str) -> tuple[list, list]:
                    PERCENTILE_CONT(0.10) WITHIN GROUP (ORDER BY cte.price)::int AS p10
             FROM price_training_data cte
             WHERE lower(cte.model) = %s
-              AND cte.price BETWEEN 20000 AND 55000 AND cte.mileage <= 80000
+              AND cte.price BETWEEN 20000 AND {max_price} AND cte.mileage <= 80000
               AND cte.year >= %s {cte_max_yr}
               AND (cte.year IS NULL OR cte.mileage::float / (%s - cte.year + 1) <= 14000)
+              {cte_pt_sql}
             GROUP BY cte.year
             HAVING count(*) >= 5
         )
-        SELECT ptd.make, ptd.model, ptd.year, ptd.mileage, ptd.price, ptd.trim
+        SELECT ptd.make, ptd.model, ptd.year, ptd.mileage, ptd.price, ptd.trim, ptd.powertrain
         FROM price_training_data ptd
         JOIN price_floors pf ON ptd.year = pf.year
         WHERE lower(ptd.model) = %s
           AND ptd.price IS NOT NULL AND ptd.mileage IS NOT NULL
-          AND ptd.price BETWEEN 20000 AND 55000 AND ptd.mileage <= 80000
+          AND ptd.price BETWEEN 20000 AND {max_price} AND ptd.mileage <= 80000
           AND ptd.year >= %s {join_max_yr}
           AND ptd.mileage::float / (%s - ptd.year + 1) <= 14000
           AND ptd.price >= pf.p10
-    """, (key, effective_min, *max_year_params, _CURRENT_YEAR,
-          key, effective_min, *max_year_params, _CURRENT_YEAR))
+          {join_pt_sql}
+    """, (key, effective_min, *max_year_params, _CURRENT_YEAR, *pt_params,
+          key, effective_min, *max_year_params, _CURRENT_YEAR, *pt_params))
 
     if key in _LISTINGS_EXCLUDED_MODELS:
         rows = list(train_rows)
@@ -232,11 +256,19 @@ def load_training_data_for(model_name: str) -> tuple[list, list]:
         listing_rows = fetch_all(f"""
             SELECT make, model, year, mileage, price, trim FROM listings
             WHERE price IS NOT NULL AND mileage IS NOT NULL
-              AND condition = 'used' AND price BETWEEN 20000 AND 55000
+              AND condition = 'used' AND price BETWEEN 20000 AND {max_price}
               AND mileage <= 80000 AND lower(model) = %s
               AND year >= %s {max_yr_sql}
         """, (key, effective_min))
         rows = list(train_rows) + list(listing_rows)
+        # For split models, filter listings by detected powertrain
+        if powertrain_filter:
+            pt_slug = "phev" if powertrain_filter in ("phev", "electric", "hybrid") else "gas"
+            rows = [
+                r for r in rows
+                if (r.get("powertrain") or detect_powertrain(r.get("trim"), r.get("model"))) == pt_slug
+                or (r.get("powertrain") or detect_powertrain(r.get("trim"), r.get("model"))) == powertrain_filter
+            ]
 
     X, y = [], []
     for row in rows:
@@ -249,6 +281,20 @@ def load_training_data_for(model_name: str) -> tuple[list, list]:
     return X, y
 
 
+def _fit_and_report(model_name: str, X: list, y: list, label: str, pkl_path: str, save: bool) -> Pipeline | None:
+    if len(X) < _MIN_ROWS:
+        print(f"  [{label}] only {len(X)} rows — skipping (needs {_MIN_ROWS}+)")
+        return None
+    pipe = _make_pipeline()
+    pipe.fit(X, y)
+    preds  = pipe.predict(X)
+    errors = np.abs(np.array(preds) - np.array(y))
+    print(f"  [{label}] n={len(X)}  MAE=${np.mean(errors):,.0f}  max=${np.max(errors):,.0f}")
+    if save:
+        joblib.dump(pipe, pkl_path)
+    return pipe
+
+
 def train(save: bool = True) -> dict[str, Pipeline]:
     """Train one model per vehicle. Returns {model_name: pipeline}."""
     fitted: dict[str, Pipeline] = {}
@@ -259,20 +305,18 @@ def train(save: bool = True) -> dict[str, Pipeline]:
         all_X.extend(X)
         all_y.extend(y)
 
-        if len(X) < _MIN_ROWS:
-            print(f"  [{model_name}] only {len(X)} rows — skipping (needs {_MIN_ROWS}+)")
-            continue
+        pipe = _fit_and_report(model_name, X, y, model_name, _pkl_path(model_name), save)
+        if pipe:
+            fitted[model_name] = pipe
 
-        pipe = _make_pipeline()
-        pipe.fit(X, y)
-        fitted[model_name] = pipe
-
-        preds  = pipe.predict(X)
-        errors = np.abs(np.array(preds) - np.array(y))
-        print(f"  [{model_name}] n={len(X)}  MAE=${np.mean(errors):,.0f}  max=${np.max(errors):,.0f}")
-
-        if save:
-            joblib.dump(pipe, _pkl_path(model_name))
+        # For split models, also train powertrain-specific sub-models
+        if model_name in _POWERTRAIN_SPLIT:
+            for pt in ("gas", "phev"):
+                X_pt, y_pt = load_training_data_for(model_name, powertrain_filter=pt)
+                label = f"{model_name}/{pt}"
+                sub_pipe = _fit_and_report(model_name, X_pt, y_pt, label, _split_pkl_path(model_name, pt), save)
+                if sub_pipe:
+                    fitted[f"{model_name}_{pt}"] = sub_pipe
 
     # Global fallback trained on all data combined
     if len(all_X) >= _MIN_ROWS:
@@ -308,10 +352,27 @@ def _load_model(pkl_path: str) -> object | None:
         return None
 
 
+def _detect_powertrain_for(listing: dict) -> str:
+    trim = listing.get("trim")
+    model = listing.get("model", "")
+    raw = (listing.get("raw") or {}).get("text") if isinstance(listing.get("raw"), dict) else None
+    return listing.get("powertrain") or detect_powertrain(trim, model, raw)
+
+
 def predict_fair_price(listing: dict) -> int | None:
     """Predict fair price using the per-model estimator, falling back to global."""
     model_name = (listing.get("model") or "").lower().strip()
     features   = [_to_features(listing)]
+
+    # For split models, prefer the powertrain-specific sub-model
+    if model_name in _POWERTRAIN_SPLIT:
+        pt = _detect_powertrain_for(listing)
+        split_model = _load_model(_split_pkl_path(model_name, pt))
+        if split_model is not None:
+            try:
+                return int(round(split_model.predict(features)[0]))
+            except Exception:
+                pass
 
     model = _load_model(_pkl_path(model_name))
     if model is not None:
@@ -362,7 +423,12 @@ def explain_listing(listing: dict) -> dict | None:
     raw_features = _to_features(listing)
     X_raw = _np.array([raw_features])
 
-    pipe = _load_model(_pkl_path(model_name))
+    pipe = None
+    if model_name in _POWERTRAIN_SPLIT:
+        pt = _detect_powertrain_for(listing)
+        pipe = _load_model(_split_pkl_path(model_name, pt))
+    if pipe is None:
+        pipe = _load_model(_pkl_path(model_name))
     if pipe is None:
         pipe = _load_model(_pkl_path("_global"))
     if pipe is None:
