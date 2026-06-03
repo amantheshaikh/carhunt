@@ -459,7 +459,7 @@ def run(run_id: str = "", force: bool = False) -> dict:
         known_fingerprints = _get_known_fingerprints("dealer")
         dealer_total = dealer_new = dealer_skipped = 0
         try:
-            for listing in scrape_all_dealers():
+            for listing in scrape_all_dealers(makes, min_year, max_year):
                 dealer_total += 1
                 if not _is_valid(listing, min_year, makes, allowed_models, max_year, max_price, max_mileage, radius):
                     dealer_skipped += 1

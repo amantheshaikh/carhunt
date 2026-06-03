@@ -54,10 +54,13 @@ def _is_overfuel_url(url: str) -> bool:
 # We intercept API responses and click through pagination rather than scraping DOM.
 # ---------------------------------------------------------------------------
 
-async def _scrape_cobalt_async(inventory_url: str, brand: str) -> list[dict]:
+async def _scrape_cobalt_async(inventory_url: str, brand: str,
+                               makes: list[str] | None = None,
+                               min_year: int = 0, max_year: int | None = None) -> list[dict]:
     inventory: list[dict] = []
     seen_ids: set[str] = set()
     base_url = "/".join(inventory_url.split("/")[:3])
+    _target_makes = {m.lower() for m in makes} if makes else set()
 
     def _extract_cobalt_price(pricing: dict) -> int | None:
         """Extract numeric price from Cobalt pricing dict."""
@@ -95,6 +98,12 @@ async def _scrape_cobalt_async(inventory_url: str, brand: str) -> list[dict]:
                 data = await resp.json()
                 for item in data.get("inventory", []):
                     if not isinstance(item, dict):
+                        continue
+                    # Server-side pre-filter: skip non-target makes and years before building listing
+                    if _target_makes and (item.get("make") or "").lower() not in _target_makes:
+                        continue
+                    item_year = int(item.get("year") or 0)
+                    if item_year and (item_year < min_year or (max_year and item_year > max_year)):
                         continue
                     vin   = item.get("vin") or None
                     uuid  = item.get("uuid") or item.get("stockNumber") or ""
@@ -279,11 +288,21 @@ def _normalize_overfuel(v: dict, brand: str, website_url: str = _OVERFUEL_BASE_U
 # from the page JS (var algoliaConfig = {...}) and stored in scraper_config.
 # ---------------------------------------------------------------------------
 
-def _scrape_dealerinspire_algolia(app_id: str, api_key: str, index: str, brand: str, website_url: str) -> list[dict]:
+def _scrape_dealerinspire_algolia(app_id: str, api_key: str, index: str, brand: str, website_url: str,
+                                  makes: list[str] | None = None,
+                                  min_year: int = 0, max_year: int | None = None) -> list[dict]:
     """Query DealerInspire's Algolia inventory index directly — no Playwright."""
     listings: list[dict] = []
     seen_ids: set[str] = set()
     page = 0
+
+    algolia_filters = "NOT type:New"
+    if makes:
+        algolia_filters += " AND (" + " OR ".join(f'make:"{m}"' for m in makes) + ")"
+    if min_year:
+        algolia_filters += f" AND year >= {min_year}"
+    if max_year:
+        algolia_filters += f" AND year <= {max_year}"
 
     while True:
         try:
@@ -294,7 +313,7 @@ def _scrape_dealerinspire_algolia(app_id: str, api_key: str, index: str, brand: 
                     "X-Algolia-API-Key": api_key,
                     "Content-Type": "application/json",
                 },
-                json={"params": f"hitsPerPage=200&page={page}&filters=NOT+type%3ANew"},
+                json={"query": "", "hitsPerPage": 200, "page": page, "filters": algolia_filters},
                 timeout=15,
             )
             data = r.json()
@@ -432,7 +451,9 @@ _RIDEMOTIVE_ALGOLIA_APP_ID = "G58LKO3ETJ"
 _RIDEMOTIVE_ALGOLIA_KEY   = "cc3dce06acb2d9fc715bc10c9a624d80"
 
 
-def _scrape_ridemotive_api(dealer_id: str, brand: str, website_url: str) -> list[dict]:
+def _scrape_ridemotive_api(dealer_id: str, brand: str, website_url: str,
+                           makes: list[str] | None = None,
+                           min_year: int = 0, max_year: int | None = None) -> list[dict]:
     base = website_url.rstrip("/")
     headers = {
         "User-Agent": _UA,
@@ -444,11 +465,20 @@ def _scrape_ridemotive_api(dealer_id: str, brand: str, website_url: str) -> list
     }
     listings: list[dict] = []
     seen_ids: set[str] = set()  # dedup by external_id — VIN alone is unsafe when vin=None
+
+    algolia_filters = f'car_condition:"Used" AND is_active:true AND dealer_ids:"{dealer_id}"'
+    if makes:
+        algolia_filters += " AND (" + " OR ".join(f'make:"{m}"' for m in makes) + ")"
+    if min_year:
+        algolia_filters += f" AND make_year >= {min_year}"
+    if max_year:
+        algolia_filters += f" AND make_year <= {max_year}"
+
     page = 0
     while True:
         body = json.dumps({
             "query": "",
-            "filters": f'car_condition:"Used" AND is_active:true AND dealer_ids:"{dealer_id}"',
+            "filters": algolia_filters,
             "hitsPerPage": 200,
             "page": page,
         })
@@ -1220,14 +1250,22 @@ def _cpo_urls_for(inventory_url: str) -> list[str]:
 SITE_TIMEOUT_SECONDS = 90
 
 
-def scrape_dealer(site: dict) -> list[dict]:
+def scrape_dealer(site: dict, makes: list[str] | None = None,
+                  min_year: int = 0, max_year: int | None = None) -> list[dict]:
     """Scrape one dealer's used + CPO inventory. Failures don't block other dealers."""
     print(f"  [dealer/{site['brand']}] {site['name']}...", flush=True)
     listings: list[dict] = []
     seen_vins: set[str] = set()
+    _target_makes = {m.lower() for m in makes} if makes else set()
 
     def _add_used(new_listings: list[dict]) -> None:
         for l in new_listings:
+            # Pre-filter: discard non-target makes and out-of-range years before saving
+            if _target_makes and (l.get("make") or "").lower() not in _target_makes:
+                continue
+            year = l.get("year")
+            if year and (year < min_year or (max_year and year > max_year)):
+                continue
             vin = l.get("vin")
             if vin and vin in seen_vins:
                 continue
@@ -1264,12 +1302,13 @@ def scrape_dealer(site: dict) -> list[dict]:
                 ))
             elif cfg.get("type") == "cobalt":
                 _add_used(_run_with_timeout(
-                    _scrape_cobalt_async(site["inventory_url"], site["brand"])
+                    _scrape_cobalt_async(site["inventory_url"], site["brand"], makes, min_year, max_year)
                 ))
             elif cfg.get("type") == "dealerinspire_algolia":
                 _add_used(_scrape_dealerinspire_algolia(
                     cfg["app_id"], cfg["api_key"], cfg["index"], site["brand"],
-                    site.get("website_url", site["inventory_url"])
+                    site.get("website_url", site["inventory_url"]),
+                    makes, min_year, max_year,
                 ))
             elif cfg.get("type") == "carscommerce":
                 _add_used(_scrape_carscommerce_api(
@@ -1281,7 +1320,8 @@ def scrape_dealer(site: dict) -> list[dict]:
             elif cfg.get("type") == "ridemotive":
                 _add_used(_scrape_ridemotive_api(
                     cfg["dealer_id"], site["brand"],
-                    site.get("website_url", site["inventory_url"])
+                    site.get("website_url", site["inventory_url"]),
+                    makes, min_year, max_year,
                 ))
             elif cfg.get("type") == "secureoffersites":
                 _add_used(_run_with_timeout(
@@ -1319,7 +1359,9 @@ def scrape_dealer(site: dict) -> list[dict]:
 DEALER_COOLDOWN_HOURS = 6
 
 
-def scrape_all_dealers(force: bool = False) -> list[dict]:
+def scrape_all_dealers(makes: list[str] | None = None,
+                       min_year: int = 0, max_year: int | None = None,
+                       force: bool = False) -> list[dict]:
     """Scrape active dealer sites. force=True bypasses the 6h cooldown (used by training_collector)."""
     if force:
         sites = fetch_all(
@@ -1342,7 +1384,7 @@ def scrape_all_dealers(force: bool = False) -> list[dict]:
 
     all_listings: list[dict] = []
     with concurrent.futures.ThreadPoolExecutor(max_workers=5) as pool:
-        futures = {pool.submit(scrape_dealer, site): site for site in sites}
+        futures = {pool.submit(scrape_dealer, site, makes, min_year, max_year): site for site in sites}
         for fut in concurrent.futures.as_completed(futures):
             site = futures[fut]
             try:
