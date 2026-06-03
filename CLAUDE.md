@@ -270,9 +270,9 @@ PROXY_URL=...                   # optional: http://user:pass@host:port for resid
 
 ---
 
-## Active Dealer Sites (59 total)
+## Active Dealer Sites (60 total)
 
-**Volvo (4):** Dyer & Dyer Volvo Cars, North Point Volvo Cars, Volvo Cars Mall of Georgia, Volvo Cars of Marietta — all use `scraper_config = {"type": "cobalt"}`
+**Volvo (5):** Dyer & Dyer Volvo Cars, North Point Volvo Cars, O'Steen Volvo Cars Athens, Volvo Cars Mall of Georgia, Volvo Cars of Marietta — all use `scraper_config = {"type": "cobalt"}`
 
 **Hyundai (10):** ALM Hyundai Athens, ALM Hyundai West, AutoNation Hyundai Mall of Georgia, Jim Ellis Hyundai, Rick Case Hyundai Atlanta, Rick Case Hyundai Roswell, South Towne Hyundai, and 3 others
 
