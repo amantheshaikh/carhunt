@@ -9,6 +9,8 @@ export interface TrainingRow {
   mileage: number | null;
   price: number;
   trim: string | null;
+  powertrain: string | null;
+  condition: string | null;
   source: string;
   collected_at: string;
   editable: boolean;  // true = price_training_data, false = listings
@@ -33,7 +35,7 @@ export async function GET(req: NextRequest) {
 
   // price_training_data rows (editable)
   const trainRows = await query<TrainingRow>(
-    `SELECT id::text, make, model, year, mileage, price, trim, source, collected_at::text, listing_url
+    `SELECT id::text, make, model, year, mileage, price, trim, powertrain, condition, source, collected_at::text, listing_url
      FROM price_training_data
      WHERE lower(model) = $1
      ORDER BY year DESC, price`,
@@ -74,7 +76,7 @@ export async function PATCH(req: NextRequest) {
   if (!id) return NextResponse.json({ error: "id required" }, { status: 400 });
 
   const body = await req.json();
-  const allowed = ["price", "mileage", "trim", "year", "model"];
+  const allowed = ["price", "mileage", "trim", "year", "model", "powertrain"];
   const updates = Object.entries(body).filter(([k]) => allowed.includes(k));
   if (!updates.length) return NextResponse.json({ error: "no valid fields" }, { status: 400 });
 

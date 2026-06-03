@@ -3,7 +3,7 @@
 import { useState, useEffect, useMemo, useCallback } from "react";
 import type { TrainingRow } from "@/app/api/training-data/route";
 
-type SortKey = "year" | "price" | "mileage" | "trim";
+type SortKey = "year" | "price" | "mileage" | "trim" | "powertrain";
 type SortDir = "asc" | "desc";
 
 function fmt$(n: number | null) {
@@ -26,7 +26,15 @@ interface EditState {
   trim: string;
   year: string;
   model: string;
+  powertrain: string;
 }
+
+const POWERTRAIN_STYLES: Record<string, string> = {
+  gas:      "bg-zinc-700 text-zinc-300",
+  hybrid:   "bg-blue-900 text-blue-300",
+  phev:     "bg-green-900 text-green-300",
+  electric: "bg-emerald-900 text-emerald-300",
+};
 
 export default function TrainingDataTab() {
   const [models, setModels] = useState<{ model: string; n: number }[]>([]);
@@ -36,10 +44,11 @@ export default function TrainingDataTab() {
   const [sort, setSort] = useState<SortKey>("year");
   const [sortDir, setSortDir] = useState<SortDir>("desc");
   const [editId, setEditId] = useState<string | null>(null);
-  const [editState, setEditState] = useState<EditState>({ price: "", mileage: "", trim: "", year: "", model: "" });
+  const [editState, setEditState] = useState<EditState>({ price: "", mileage: "", trim: "", year: "", model: "", powertrain: "gas" });
   const [showListings, setShowListings] = useState(false);
   const [saving, setSaving] = useState(false);
   const [filterYear, setFilterYear] = useState<string>("");
+  const [filterPowertrain, setFilterPowertrain] = useState<string>("");
 
   useEffect(() => {
     fetch("/api/training-data")
@@ -71,17 +80,19 @@ export default function TrainingDataTab() {
   const filtered = useMemo(() => {
     let out = displayRows;
     if (filterYear) out = out.filter((r) => String(r.year) === filterYear);
+    if (filterPowertrain) out = out.filter((r) => (r.powertrain ?? "gas") === filterPowertrain);
     return [...out].sort((a, b) => {
       let va: number | string, vb: number | string;
       switch (sort) {
-        case "year":    va = a.year; vb = b.year; break;
-        case "price":   va = a.price ?? 0; vb = b.price ?? 0; break;
-        case "mileage": va = a.mileage ?? 0; vb = b.mileage ?? 0; break;
-        case "trim":    va = a.trim ?? ""; vb = b.trim ?? ""; break;
+        case "year":       va = a.year; vb = b.year; break;
+        case "price":      va = a.price ?? 0; vb = b.price ?? 0; break;
+        case "mileage":    va = a.mileage ?? 0; vb = b.mileage ?? 0; break;
+        case "trim":       va = a.trim ?? ""; vb = b.trim ?? ""; break;
+        case "powertrain": va = a.powertrain ?? ""; vb = b.powertrain ?? ""; break;
       }
       return sortDir === "asc" ? (va < vb ? -1 : va > vb ? 1 : 0) : (va > vb ? -1 : va < vb ? 1 : 0);
     });
-  }, [displayRows, filterYear, sort, sortDir]);
+  }, [displayRows, filterYear, filterPowertrain, sort, sortDir]);
 
   // Per-year stats for training rows
   const yearStats = useMemo(() => {
@@ -106,6 +117,7 @@ export default function TrainingDataTab() {
       trim: row.trim ?? "",
       year: String(row.year),
       model: row.model,
+      powertrain: row.powertrain ?? "gas",
     });
   };
 
@@ -121,6 +133,7 @@ export default function TrainingDataTab() {
         trim: editState.trim || null,
         year: Number(editState.year),
         model: editState.model,
+        powertrain: editState.powertrain || "gas",
       }),
     });
     setSaving(false);
@@ -166,6 +179,19 @@ export default function TrainingDataTab() {
               {y} ({yearStats[y]?.n ?? 0} rows, med {fmt$(yearStats[y]?.median ?? null)})
             </option>
           ))}
+        </select>
+
+        {/* Powertrain filter */}
+        <select
+          className="bg-zinc-800 text-sm text-white px-3 py-1.5 rounded border border-zinc-700 focus:outline-none"
+          value={filterPowertrain}
+          onChange={(e) => setFilterPowertrain(e.target.value)}
+        >
+          <option value="">All powertrains</option>
+          <option value="gas">Gas</option>
+          <option value="hybrid">Hybrid</option>
+          <option value="phev">PHEV</option>
+          <option value="electric">Electric</option>
         </select>
 
         {/* Toggle listings */}
@@ -221,6 +247,9 @@ export default function TrainingDataTab() {
                 <th className="px-3 py-2 text-left cursor-pointer hover:text-white" onClick={() => colSort("trim")}>
                   Trim<SortArrow col="trim" />
                 </th>
+                <th className="px-3 py-2 text-left cursor-pointer hover:text-white" onClick={() => colSort("powertrain")}>
+                  Powertrain<SortArrow col="powertrain" />
+                </th>
                 <th className="px-3 py-2 text-right cursor-pointer hover:text-white" onClick={() => colSort("mileage")}>
                   Mileage<SortArrow col="mileage" />
                 </th>
@@ -258,6 +287,18 @@ export default function TrainingDataTab() {
                             value={editState.trim}
                             onChange={(e) => setEditState((s) => ({ ...s, trim: e.target.value }))}
                           />
+                        </td>
+                        <td className="px-3 py-1.5">
+                          <select
+                            className="bg-zinc-700 text-white px-1.5 py-0.5 rounded text-sm"
+                            value={editState.powertrain}
+                            onChange={(e) => setEditState((s) => ({ ...s, powertrain: e.target.value }))}
+                          >
+                            <option value="gas">gas</option>
+                            <option value="hybrid">hybrid</option>
+                            <option value="phev">phev</option>
+                            <option value="electric">electric</option>
+                          </select>
                         </td>
                         <td className="px-3 py-1.5 text-right">
                           <input
@@ -314,6 +355,13 @@ export default function TrainingDataTab() {
                           onClick={!isListing ? () => startEdit(row) : undefined}
                         >
                           {row.trim ?? <span className="text-zinc-600">—</span>}
+                        </td>
+                        <td className="px-3 py-2">
+                          {row.powertrain ? (
+                            <span className={`px-1.5 py-0.5 text-xs rounded font-medium ${POWERTRAIN_STYLES[row.powertrain] ?? "bg-zinc-700 text-zinc-300"}`}>
+                              {row.powertrain}
+                            </span>
+                          ) : <span className="text-zinc-600">—</span>}
                         </td>
                         <td
                           className={`px-3 py-2 text-right text-zinc-400 tabular-nums ${!isListing ? "cursor-pointer hover:text-white hover:bg-zinc-800/50" : ""}`}
