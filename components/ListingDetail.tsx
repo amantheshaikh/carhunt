@@ -91,11 +91,13 @@ export default function ListingDetail({ listing: l, onClose, onAction }: Props) 
     if (e.key === "Escape") { setEditingField(null); }
   };
 
-  useEffect(() => {
+  const refreshContactLog = useCallback(() => {
     fetch(`/api/listings/${l.id}`)
       .then((r) => r.json())
-      .then((data) => setContactLog(data.contactLog ?? []));
+      .then((d) => setContactLog(d.contactLog ?? []));
   }, [l.id]);
+
+  useEffect(() => { refreshContactLog(); }, [refreshContactLog]);
 
   const handleContact = async () => {
     setCopying(true);
@@ -108,10 +110,7 @@ export default function ListingDetail({ listing: l, onClose, onAction }: Props) 
     if (data.inquiry_text) {
       await navigator.clipboard.writeText(data.inquiry_text);
       window.open(l.listing_url, "_blank");
-      // Refresh contact log
-      fetch(`/api/listings/${l.id}`)
-        .then((r) => r.json())
-        .then((d) => setContactLog(d.contactLog ?? []));
+      refreshContactLog();
     }
     setCopying(false);
   };
@@ -124,9 +123,7 @@ export default function ListingDetail({ listing: l, onClose, onAction }: Props) 
       body: JSON.stringify({ listing_id: l.id, note }),
     });
     setNote("");
-    fetch(`/api/listings/${l.id}`)
-      .then((r) => r.json())
-      .then((d) => setContactLog(d.contactLog ?? []));
+    refreshContactLog();
   };
 
   return (
@@ -490,7 +487,7 @@ export default function ListingDetail({ listing: l, onClose, onAction }: Props) 
         {["new", "active", "contacted"].includes(l.status) && (
           <>
             <button onClick={() => onAction(l.id, "snooze")} className="px-3 py-1.5 text-xs bg-zinc-800 hover:bg-zinc-700 text-zinc-300 rounded-lg">Snooze 7d</button>
-            <button onClick={() => onAction(l.id, "expire")} className="px-3 py-1.5 text-xs bg-zinc-800 hover:bg-zinc-700 text-zinc-300 rounded-lg">Mark Dismissed</button>
+            <button onClick={() => onAction(l.id, "dismiss")} className="px-3 py-1.5 text-xs bg-zinc-800 hover:bg-zinc-700 text-zinc-300 rounded-lg">Mark Dismissed</button>
             <button onClick={() => onAction(l.id, "purchase")} className="px-3 py-1.5 text-xs bg-green-900 hover:bg-green-800 text-green-300 rounded-lg">I Bought This</button>
           </>
         )}

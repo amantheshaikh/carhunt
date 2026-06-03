@@ -67,6 +67,23 @@ function applyFiltersAndSort(listings: Listing[], filters: Filters, sort: SortKe
   return out;
 }
 
+// ─── Shared filter chip ───────────────────────────────────────────────────────
+
+function FilterChip({ active, onClick, children }: { active: boolean; onClick: () => void; children: React.ReactNode }) {
+  return (
+    <button
+      onClick={onClick}
+      className={`px-2.5 py-1 text-xs rounded-full border transition-colors ${
+        active
+          ? "bg-blue-700 border-blue-600 text-white"
+          : "bg-zinc-800 border-zinc-700 text-zinc-300 hover:bg-zinc-700"
+      }`}
+    >
+      {children}
+    </button>
+  );
+}
+
 // ─── Filter bar component ─────────────────────────────────────────────────────
 
 function FilterBar({
@@ -156,17 +173,9 @@ function FilterBar({
               <p className="text-xs text-zinc-500 mb-1.5 font-medium">Model</p>
               <div className="flex flex-wrap gap-1.5">
                 {models.map((m) => (
-                  <button
-                    key={m}
-                    onClick={() => toggleModel(m)}
-                    className={`px-2.5 py-1 text-xs rounded-full border transition-colors ${
-                      filters.models.includes(m)
-                        ? "bg-blue-700 border-blue-600 text-white"
-                        : "bg-zinc-800 border-zinc-700 text-zinc-300 hover:bg-zinc-700"
-                    }`}
-                  >
+                  <FilterChip key={m} active={filters.models.includes(m)} onClick={() => toggleModel(m)}>
                     {m}
-                  </button>
+                  </FilterChip>
               ))}
               </div>
             </div>
@@ -175,17 +184,9 @@ function FilterBar({
               <p className="text-xs text-zinc-500 mb-1.5 font-medium">Year</p>
               <div className="flex flex-wrap gap-1.5">
                 {years.map((y) => (
-                  <button
-                    key={y}
-                    onClick={() => toggleYear(y)}
-                    className={`px-2.5 py-1 text-xs rounded-full border transition-colors ${
-                      filters.years.includes(y)
-                        ? "bg-blue-700 border-blue-600 text-white"
-                        : "bg-zinc-800 border-zinc-700 text-zinc-300 hover:bg-zinc-700"
-                    }`}
-                  >
+                  <FilterChip key={y} active={filters.years.includes(y)} onClick={() => toggleYear(y)}>
                     {y}
-                  </button>
+                  </FilterChip>
                 ))}
               </div>
             </div>
@@ -197,14 +198,9 @@ function FilterBar({
               <p className="text-xs text-zinc-500 mb-1.5 font-medium">Drivetrain</p>
               <div className="flex gap-1.5">
                 {[["", "All"], ["awd", "AWD"], ["fwd", "FWD"]].map(([v, label]) => (
-                  <button key={v}
-                    onClick={() => onFilters({ ...filters, drivetrain: v as Filters["drivetrain"] })}
-                    className={`px-2.5 py-1 text-xs rounded-full border transition-colors ${
-                      filters.drivetrain === v
-                        ? "bg-blue-700 border-blue-600 text-white"
-                        : "bg-zinc-800 border-zinc-700 text-zinc-300 hover:bg-zinc-700"
-                    }`}
-                  >{label}</button>
+                  <FilterChip key={v} active={filters.drivetrain === v} onClick={() => onFilters({ ...filters, drivetrain: v as Filters["drivetrain"] })}>
+                    {label}
+                  </FilterChip>
                 ))}
               </div>
             </div>
@@ -213,14 +209,9 @@ function FilterBar({
               <p className="text-xs text-zinc-500 mb-1.5 font-medium">Powertrain</p>
               <div className="flex gap-1.5">
                 {[["", "All"], ["hybrid", "Hybrid"], ["gas", "Gas only"]].map(([v, label]) => (
-                  <button key={v}
-                    onClick={() => onFilters({ ...filters, powertrain: v as Filters["powertrain"] })}
-                    className={`px-2.5 py-1 text-xs rounded-full border transition-colors ${
-                      filters.powertrain === v
-                        ? "bg-blue-700 border-blue-600 text-white"
-                        : "bg-zinc-800 border-zinc-700 text-zinc-300 hover:bg-zinc-700"
-                    }`}
-                  >{label}</button>
+                  <FilterChip key={v} active={filters.powertrain === v} onClick={() => onFilters({ ...filters, powertrain: v as Filters["powertrain"] })}>
+                    {label}
+                  </FilterChip>
                 ))}
               </div>
             </div>
@@ -229,14 +220,9 @@ function FilterBar({
               <p className="text-xs text-zinc-500 mb-1.5 font-medium">Deal quality</p>
               <div className="flex gap-1.5">
                 {([["", "Any"], [45, "Fair Price+"], [58, "Good Deal+"], [72, "Great Deal+"], [88, "Exceptional"]] as [number|"", string][]).map(([v, label]) => (
-                  <button key={String(v)}
-                    onClick={() => onFilters({ ...filters, minDealScore: v as Filters["minDealScore"] })}
-                    className={`px-2.5 py-1 text-xs rounded-full border transition-colors ${
-                      filters.minDealScore === v
-                        ? "bg-blue-700 border-blue-600 text-white"
-                        : "bg-zinc-800 border-zinc-700 text-zinc-300 hover:bg-zinc-700"
-                    }`}
-                  >{label}</button>
+                  <FilterChip key={String(v)} active={filters.minDealScore === v} onClick={() => onFilters({ ...filters, minDealScore: v as Filters["minDealScore"] })}>
+                    {label}
+                  </FilterChip>
                 ))}
               </div>
             </div>
@@ -248,14 +234,9 @@ function FilterBar({
               <p className="text-xs text-zinc-500 mb-1.5 font-medium">Max price</p>
               <div className="flex gap-1.5">
                 {[["", "Any"], [25000, "$25k"], [28000, "$28k"], [30000, "$30k"], [33000, "$33k"]].map(([v, label]) => (
-                  <button key={String(v)}
-                    onClick={() => onFilters({ ...filters, maxPrice: v as Filters["maxPrice"] })}
-                    className={`px-2.5 py-1 text-xs rounded-full border transition-colors ${
-                      filters.maxPrice === v
-                        ? "bg-blue-700 border-blue-600 text-white"
-                        : "bg-zinc-800 border-zinc-700 text-zinc-300 hover:bg-zinc-700"
-                    }`}
-                  >{label}</button>
+                  <FilterChip key={String(v)} active={filters.maxPrice === v} onClick={() => onFilters({ ...filters, maxPrice: v as Filters["maxPrice"] })}>
+                    {label}
+                  </FilterChip>
                 ))}
               </div>
             </div>
@@ -264,14 +245,9 @@ function FilterBar({
               <p className="text-xs text-zinc-500 mb-1.5 font-medium">Max mileage</p>
               <div className="flex gap-1.5">
                 {[["", "Any"], [5000, "5k"], [10000, "10k"], [20000, "20k"], [30000, "30k"]].map(([v, label]) => (
-                  <button key={String(v)}
-                    onClick={() => onFilters({ ...filters, maxMileage: v as Filters["maxMileage"] })}
-                    className={`px-2.5 py-1 text-xs rounded-full border transition-colors ${
-                      filters.maxMileage === v
-                        ? "bg-blue-700 border-blue-600 text-white"
-                        : "bg-zinc-800 border-zinc-700 text-zinc-300 hover:bg-zinc-700"
-                    }`}
-                  >{label}</button>
+                  <FilterChip key={String(v)} active={filters.maxMileage === v} onClick={() => onFilters({ ...filters, maxMileage: v as Filters["maxMileage"] })}>
+                    {label}
+                  </FilterChip>
                 ))}
               </div>
             </div>

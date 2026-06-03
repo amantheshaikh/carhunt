@@ -177,7 +177,7 @@ _LISTINGS_EXCLUDED_MODELS = {"tucson hybrid"}
 # Models where older inventory is a different vehicle platform — exclude pre-platform rows
 # so the model isn't contaminated by a fundamentally different car's depreciation curve.
 _PLATFORM_MIN_YEAR: dict[str, int] = {
-    "tucson hybrid":   2022,  # NX platform launched 2022
+    "tucson hybrid":   2022,  # TNGA-K hybrid platform gen launched 2022
     "sportage hybrid": 2023,  # NQ5 platform launched 2023
     "tiguan":          2022,  # MK2 LCI refresh 2022 (new interior/features)
     "envision":        2021,  # 2nd gen launched 2021; 2020 is first gen
@@ -243,7 +243,8 @@ def load_training_data_for(model_name: str) -> tuple[list, list]:
         try:
             X.append(_to_features(row))
             y.append(float(row["price"]))
-        except Exception:
+        except Exception as e:
+            print(f"  [price_model] skipping row for {model_name}: {e}")
             continue
     return X, y
 

@@ -21,6 +21,7 @@ export async function POST() {
     stdio: ["ignore", logFile, logFile],
     env: { ...process.env, PYTHONUNBUFFERED: "1" },
   });
+  fs.closeSync(logFile); // child inherited the fd; parent's copy must be closed to avoid leak
   child.unref();
 
   return NextResponse.json({ ok: true });

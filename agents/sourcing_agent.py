@@ -482,7 +482,8 @@ def run(run_id: str = "", force: bool = False) -> dict:
                     known_dealer[ext_id] = listing["price"]
                     if vin: shared_known_vins.add(vin)
                     shared_known_urls.add(url)
-                    known_fingerprints.add(fp)
+                    if all(v is not None for v in fp):
+                        known_fingerprints.add(fp)
                     dealer_new += 1
                 else:
                     _touch_existing("dealer", ext_id, listing["price"], known_dealer[ext_id])

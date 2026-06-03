@@ -25,7 +25,8 @@ export async function POST(req: NextRequest) {
     .replace("{price}", priceFormatted)
     .replace("{vin}", listing.vin ?? "N/A");
 
-  // Log contact attempt via Python (fire and forget)
+  // Log contact attempt via Python (fire and forget).
+  // listing_id is passed as argv[1] — never interpolated into script source — to prevent code injection.
   const agentsDir = process.env.AGENTS_DIR ?? "/agents";
   const venvPython = process.env.AGENTS_PYTHON ?? "python3";
   const logScript = `
@@ -33,10 +34,11 @@ import sys, os
 sys.path.insert(0, '${agentsDir}')
 os.chdir('${agentsDir}')
 from tools.db import execute
-execute("INSERT INTO contact_log (listing_id, channel) VALUES (%s, 'contact_form')", ('${listing_id}',))
-execute("UPDATE listings SET status = 'contacted' WHERE id = %s AND status NOT IN ('purchased','dismissed')", ('${listing_id}',))
+lid = sys.argv[1]
+execute("INSERT INTO contact_log (listing_id, channel) VALUES (%s, 'contact_form')", (lid,))
+execute("UPDATE listings SET status = 'contacted' WHERE id = %s AND status NOT IN ('purchased','dismissed')", (lid,))
 `;
-  const child = spawn(venvPython, ["-c", logScript], { detached: true, stdio: "ignore" });
+  const child = spawn(venvPython, ["-c", logScript, String(listing_id)], { detached: true, stdio: "ignore" });
   child.unref();
 
   return NextResponse.json({

@@ -9,7 +9,7 @@ export async function GET(req: NextRequest) {
   const statusFilter: Record<string, string[]> = {
     active: ["new", "active"],
     contacted: ["contacted"],
-    expired: ["dismissed"],
+    dismissed: ["dismissed"],
     purchased: ["purchased"],
   };
 

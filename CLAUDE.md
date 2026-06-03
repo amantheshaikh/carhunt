@@ -16,7 +16,6 @@ carhunt/
 │   ├── orchestrator.py       # Entry point: Sourcing → Model retrain → Scoring
 │   ├── sourcing_agent.py     # Scrapes all sources, diffs against DB, enriches new listings
 │   ├── analysis_agent.py     # Scores unscored listings (pure ML, no LLM)
-│   ├── communication_agent.py# Spawned by /api/contact to log outreach
 │   ├── query_agent.py        # Natural-language query CLI (spawned by /api/query)
 │   ├── training_collector.py # Collects broad market data for ML training
 │   ├── cars.json             # Single source of truth: target vehicles + trim rules
@@ -129,7 +128,7 @@ carhunt/
 | 72–88 | Great Deal | ~10–18% below fair value |
 | 58–72 | Good Deal | ~5–10% below fair value |
 | 45–58 | Fair Price | Near fair value |
-| < 40 | Auto-expired | Overpriced — removed from active listings |
+| < 40 | Poor Value | Overpriced relative to fair value |
 
 Scores are displayed as human-readable deal categories in the dashboard (not raw numbers). The ML model encodes year, mileage, trim, drivetrain, and powertrain into the predicted fair price — no LLM involved in scoring.
 
@@ -208,7 +207,7 @@ python3 training_collector.py --broad
 |---|---|
 | `agents/cars.json` | Add/remove models, change trims, update CarGurus IDs or search paths |
 | `agents/tools/scoring.py` | Adjust sigmoid steepness (currently 25×), drivetrain/powertrain detection keywords |
-| `agents/analysis_agent.py` | Adjust auto-expire score threshold (currently < 40) |
+| `agents/analysis_agent.py` | Adjust deal-category score thresholds |
 | `agents/tools/price_model.py` | Change ML features, trim rankings, drivetrain overrides, platform min-years |
 | `agents/tools/scrapers.py` | Change CarGurus new/legacy format, pagination, anti-detection, LLM insight extraction |
 | `agents/tools/base_trims.py` | Change trim normalization logic (canonical_trim passes) |
@@ -297,7 +296,7 @@ PROXY_URL=...                   # optional: http://user:pass@host:port for resid
 
 ## Development Notes
 
-- **Status system:** `new` → `active` → `contacted` → `purchased`. `expired` = gone. Listings auto-expire if score < 40 OR if the user manually marks them expired. Listings are **never** expired just because a scrape didn't find them.
+- **Status system:** `new` → `active` → `contacted` → `purchased`. `dismissed` = user-removed. Score < 40 is a display category only (shown as "Poor Value") — listings are **never** auto-dismissed by score. Listings are **never** dismissed just because a scrape didn't find them.
 - **No auto-sold:** Scraper never marks listings as sold. User controls this via "Mark Expired".
 - **New car scraping is disabled.** Only used/CPO cars.
 - **Detail-page enrichment** runs concurrently (3 pages at a time) with a 10-minute total session cap. Only CarGurus and Cars.com require enrichment. LLM insight extraction runs in a background thread per listing (timeout=15s).
