@@ -13,7 +13,7 @@ import time
 from datetime import datetime
 from dotenv import load_dotenv
 
-TIMEOUT_SECONDS          = 1800  # 30 min total watchdog (parallelized dealers + bounded enrichment)
+TIMEOUT_SECONDS          = 3600  # 60 min total watchdog (CarGurus scrapes 9 models sequentially)
 _TRAINING_TIMEOUT        = 300   # 5 min hard cap on price model training
 _SCORING_TIMEOUT         = 300   # 5 min hard cap on analysis/scoring
 

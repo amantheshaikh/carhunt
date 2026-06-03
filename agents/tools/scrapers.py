@@ -633,12 +633,12 @@ async def _scrape_cargurus_search_all_async(
                     for page_num in range(1, 101):
                         url = base + (f"&page={page_num}" if page_num > 1 else "")
                         await page.goto(url, wait_until="domcontentloaded", timeout=30_000)
-                        await _human_delay(page, 5000, 8000)
+                        await _human_delay(page, 3000, 5000)
                         await _check_blocked(page, "cargurus")
                         await _dismiss_cargurus_modal(page)
-                        await page.wait_for_timeout(1500)
+                        await page.wait_for_timeout(1000)
                         await _gradual_scroll(page)
-                        await page.wait_for_timeout(2000)
+                        await page.wait_for_timeout(1500)
                         tiles = await page.evaluate("""() =>
                             Array.from(document.querySelectorAll('[data-testid="srp-listing-tile"]')).map(el => {
                                 const link = el.querySelector('a[href*="/details/"],a[href*="/vehicledetail/"]');
