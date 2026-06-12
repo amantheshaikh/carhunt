@@ -10,6 +10,7 @@ export interface TrainingRow {
   price: number;
   trim: string | null;
   powertrain: string | null;
+  drivetrain: string | null;
   condition: string | null;
   source: string;
   collected_at: string;
@@ -35,7 +36,7 @@ export async function GET(req: NextRequest) {
 
   // price_training_data rows (editable)
   const trainRows = await query<TrainingRow>(
-    `SELECT id::text, make, model, year, mileage, price, trim, powertrain, condition, source, collected_at::text, listing_url
+    `SELECT id::text, make, model, year, mileage, price, trim, powertrain, drivetrain, condition, source, collected_at::text, listing_url
      FROM price_training_data
      WHERE lower(model) = $1
      ORDER BY year DESC, price`,
@@ -43,22 +44,18 @@ export async function GET(req: NextRequest) {
   );
   const editable = trainRows.map((r) => ({ ...r, editable: true }));
 
-  // listings rows (read-only reference — excluded models only use training data)
-  const LISTINGS_EXCLUDED = new Set(["tucson hybrid"]);
-  let listingRows: TrainingRow[] = [];
-  if (!LISTINGS_EXCLUDED.has(m)) {
-    const rows = await query<TrainingRow>(
-      `SELECT id::text, make, model, year, mileage, price, trim, source, first_seen_at::text as collected_at, listing_url
-       FROM listings
-       WHERE lower(model) = $1
-         AND condition = 'used'
-         AND price BETWEEN 10000 AND 55000
-         AND mileage <= 80000
-       ORDER BY year DESC, price`,
-      [m]
-    );
-    listingRows = rows.map((r) => ({ ...r, editable: false, source: "listing" }));
-  }
+  // listings rows (read-only reference)
+  const rows = await query<TrainingRow>(
+    `SELECT id::text, make, model, year, mileage, price, trim, source, first_seen_at::text as collected_at, listing_url
+     FROM listings
+     WHERE lower(model) = $1
+       AND condition = 'used'
+       AND price BETWEEN 10000 AND 55000
+       AND mileage <= 80000
+     ORDER BY year DESC, price`,
+    [m]
+  );
+  const listingRows = rows.map((r) => ({ ...r, editable: false, source: "listing" }));
 
   return NextResponse.json([...editable, ...listingRows]);
 }
@@ -76,7 +73,7 @@ export async function PATCH(req: NextRequest) {
   if (!id) return NextResponse.json({ error: "id required" }, { status: 400 });
 
   const body = await req.json();
-  const allowed = ["price", "mileage", "trim", "year", "model", "powertrain"];
+  const allowed = ["price", "mileage", "trim", "year", "model", "powertrain", "drivetrain"];
   const updates = Object.entries(body).filter(([k]) => allowed.includes(k));
   if (!updates.length) return NextResponse.json({ error: "no valid fields" }, { status: 400 });
 

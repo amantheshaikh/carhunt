@@ -4,6 +4,7 @@
       "make": "Hyundai", "model": "Tucson Hybrid", "cargurus_id": "d3141",
       "cargurus_search_path": "m28,m28/d3141,m28/d3141/SEL Convenience AWD,m28/d3141/Limited AWD",
       "trims": ["SEL Convenience", "N Line", "Limited"],
+      "training_trims": ["Blue", "SEL", "SEL Convenience", "N Line", "Limited"],
       "min_year": 2025, "trim_max_year": {"N Line": 2025},
       "msrp": {
         "2025": { "SEL": 33450, "SEL Convenience": 36465, "N Line": 38215, "Limited": 41295 },
@@ -11,21 +12,51 @@
       }
     },
     {
-      "make": "Kia", "model": "Sportage Hybrid", "cargurus_id": "d3239",
-      "cargurus_search_path": "m33,m33/d3239,m33/d3239/EX AWD,m33/d3239/SX-Prestige AWD,m33/d3239/X-Line AWD",
-      "trims": ["EX", "X-Line", "SX Prestige"], "min_year": 2026,
+      "make": "Genesis", "model": "GV70", "cargurus_id": "d3163",
+      "cargurus_search_path": "m203/d3163,m203/d3163/2.5T Advanced AWD,m203/d3163/2.5T Advanced Plus AWD,m203/d3163/2.5T Sport Prestige AWD,m203/d3163/2.5T Select AWD,m203/d3163/2.5T Standard AWD",
+      "trims": ["Advanced", "Advanced Plus", "Sport Prestige"],
+      "training_trims": ["Standard", "Select", "Advanced", "Advanced Plus", "Sport Prestige"],
+      "engine_filter": ["2.5T"],
+      "min_year": 2023, "max_year": 2025,
       "msrp": {
-        "2026": { "EX": 34990, "SX Prestige": 42055 }
+        "2023": { "2.5T Standard": 42950, "2.5T Select": 47045, "2.5T Advanced": 51295, "2.5T Sport Prestige": 56695, "3.5T Sport": 55470, "3.5T Sport Prestige": 62495 },
+        "2024": { "2.5T Standard": 43950, "2.5T Select": 48045, "2.5T Advanced": 52295, "2.5T Advanced Plus": 53795, "2.5T Sport Prestige": 57945, "3.5T Sport": 56920, "3.5T Sport Prestige": 63995 },
+        "2025": { "2.5T Standard": 44450, "2.5T Select": 48545, "2.5T Advanced": 52995, "2.5T Advanced Plus": 54595, "2.5T Sport Prestige": 58945, "3.5T Sport": 57920, "3.5T Sport Prestige": 65195 }
+      }
+    },
+    {
+      "make": "Kia", "model": "Sportage PHEV", "cargurus_id": "d3244",
+      "cargurus_search_path": "m33,m33/d3244,m33/d3244/EX AWD,m33/d3244/EX Premium AWD,m33/d3244/SX AWD,m33/d3244/X-Line AWD,m33/d3244/X-Line Prestige AWD",
+      "trims": ["EX", "EX Premium", "X-Line", "X-Line Prestige", "SX"],
+      "min_year": 2023, "max_year": 2025,
+      "msrp": {
+        "2023": { "EX": 33490, "EX Premium": 37490, "X-Line": 37890, "X-Line Prestige": 41890, "SX": 40490 },
+        "2024": { "EX": 33990, "EX Premium": 37990, "X-Line": 38390, "X-Line Prestige": 42390, "SX": 40990 },
+        "2025": { "EX": 34790, "EX Premium": 38790, "X-Line": 39190, "X-Line Prestige": 43190, "SX": 41790 }
+      }
+    },
+    {
+      "make": "Kia", "model": "Sportage Hybrid", "cargurus_id": "d3239",
+      "cargurus_search_path": "m33,m33/d3239,m33/d3239/EX AWD,m33/d3239/EX FWD,m33/d3239/SX-Prestige AWD,m33/d3239/X-Line AWD",
+      "trims": ["EX", "X-Line", "SX Prestige"],
+      "training_trims": ["LX", "EX", "X-Line", "SX Prestige"],
+      "min_year": 2023,
+      "msrp": {
+        "2023": { "LX": 27590, "EX": 30090, "X-Line": 32590, "SX Prestige": 37090 },
+        "2024": { "LX": 28090, "EX": 30590, "X-Line": 33090, "SX Prestige": 37590 },
+        "2025": { "LX": 28590, "EX": 31090, "X-Line": 33590, "SX Prestige": 38090 },
+        "2026": { "EX": 34990, "X-Line": 36885, "SX Prestige": 42055 }
       }
     },
     {
       "make": "Volkswagen", "model": "Tiguan", "cargurus_id": "d1104",
       "cargurus_search_path": "m55/d1104,m55,m55/d1104/SE R-Line Black 4Motion,m55/d1104/SE R-Line Black FWD,m55/d1104/SEL R-Line 4Motion,m55/d1104/SEL R-Line Turbo 4Motion",
       "trims": ["SE", "SEL R-Line", "SE R-Line Black"],
+      "training_trims": ["S", "SE", "SE R-Line Black", "SEL R-Line"],
       "min_year": 2025,
       "msrp": {
-        "2025": { "SE": 32295, "SE R-Line Black": 35455, "SEL R-Line": 41180 },
-        "2026": { "SE": 35080, "SE R-Line Black": 38240, "SEL R-Line": 44560 }
+        "2025": { "SE": 32295, "SE AWD": 35970, "SE R-Line Black": 35455, "SE R-Line Black AWD": 36955, "SEL R-Line": 41180 },
+        "2026": { "SE": 35080, "SE AWD": 36580, "SE R-Line Black": 38240, "SE R-Line Black AWD": 39740, "SEL R-Line": 44560 }
       }
     },
     {
@@ -65,33 +96,59 @@
       "make": "Volvo", "model": "XC40", "cargurus_id": "d2624",
       "cargurus_search_path": "m56/d2624/B5 Plus Bright Theme AWD,m56/d2624/B5 Plus Dark Theme AWD,m56/d2624/B5 Ultimate Bright Theme AWD,m56/d2624/B5 Ultimate Dark Theme AWD,m56/d2624/B4 Plus Bright Theme FWD,m56/d2624/B4 Plus Dark Theme FWD,m56/d2624/B4 Ultimate Bright Theme FWD,m56/d2624/B4 Ultimate Dark Theme FWD,m56,m56/d2624",
       "trims": ["Plus", "Ultimate"],
-      "min_year": 2023,
+      "min_year": 2023, "max_year": 2025,
       "msrp": {
         "2023": { "Plus": 43295, "Ultimate": 48295 },
         "2024": { "Plus": 44295, "Ultimate": 49295 },
-        "2025": { "Plus": 45295, "Ultimate": 50295 }
+        "2025": { "Plus": 45295, "Ultimate": 50295 },
+        "2026": { "Plus": 43900, "Ultimate": 51250 }
       }
     },
     {
       "make": "Volvo", "model": "XC60", "cargurus_id": "d1629",
-      "cargurus_search_path": "m56/d1629/B5 Plus Bright Theme AWD,m56/d1629/B5 Plus Dark Theme AWD,m56/d1629/B5 Ultimate Bright Theme AWD,m56/d1629/B5 Ultimate Dark Theme AWD,m56,m56/d1629",
+      "cargurus_search_path": "m56/d1629/B5 Plus Bright Theme AWD,m56/d1629/B5 Plus Dark Theme AWD,m56/d1629/B5 Ultimate Bright Theme AWD,m56/d1629/B5 Ultimate Dark Theme AWD,m56/d1629/Recharge T8 Plus Dark Theme eAWD,m56/d1629/Recharge T8 Plus Bright Theme eAWD,m56/d1629/Recharge T8 Ultimate Dark Theme eAWD,m56/d1629/Recharge T8 Ultimate Bright Theme eAWD,m56,m56/d1629",
       "trims": ["Plus", "Ultimate"],
-      "min_year": 2023,
+      "min_year": 2023, "max_year": 2025,
       "msrp": {
         "2023": { "Plus": 47045, "Ultimate": 55045 },
         "2024": { "Plus": 48045, "Ultimate": 56045 },
-        "2025": { "Plus": 49045, "Ultimate": 57045 }
+        "2025": { "Plus": 49045, "Ultimate": 57045 },
+        "2026": { "Plus": 54300, "Ultimate": 59650 }
       }
     },
     {
       "make": "Volvo", "model": "XC60 Recharge", "cargurus_id": "d1629",
-      "cargurus_search_path": "m56/d1629/Recharge T8 Plus Dark Theme eAWD,m56/d1629/Recharge T8 Plus Bright Theme eAWD,m56/d1629/Recharge T8 Ultimate Dark Theme eAWD,m56/d1629/Recharge T8 Ultimate Bright Theme eAWD,m56,m56/d1629",
       "trims": ["Plus", "Ultimate"],
       "min_year": 2023, "max_year": 2025,
       "msrp": {
         "2023": { "Plus": 58845, "Ultimate": 66845 },
         "2024": { "Plus": 59845, "Ultimate": 67845 },
         "2025": { "Plus": 61845, "Ultimate": 69845 }
+      }
+    },
+    {
+      "make": "Cadillac", "model": "XT4", "cargurus_id": "d2673",
+      "cargurus_search_path": "m22,m22/d2673,m22/d2673/Luxury AWD,m22/d2673/Luxury FWD,m22/d2673/Premium Luxury AWD,m22/d2673/Premium Luxury FWD,m22/d2673/Sport AWD,m22/d2673/Sport FWD",
+      "trims": ["Luxury", "Premium Luxury", "Sport"],
+      "training_trims": ["Luxury", "Premium Luxury", "Sport"],
+      "min_year": 2024, "max_year": 2025,
+      "msrp": {
+        "2022": { "Luxury": 36495, "Premium Luxury": 42095, "Sport": 42895 },
+        "2023": { "Luxury": 37295, "Premium Luxury": 42895, "Sport": 43695 },
+        "2024": { "Luxury": 38495, "Premium Luxury": 44095, "Sport": 44895 },
+        "2025": { "Luxury": 39695, "Premium Luxury": 45295, "Sport": 46095 }
+      }
+    },
+    {
+      "make": "Mazda", "model": "CX-50 Hybrid", "cargurus_id": "d3170",
+      "cargurus_search_path": "m42,m42/d3170",
+      "trims": ["Preferred", "Premium", "Premium Plus"],
+      "engine_filter": ["Hybrid"],
+      "min_year": 2024,
+      "msrp": {
+        "2024": { "Preferred": 36045, "Premium": 39045, "Premium Plus": 41045 },
+        "2025": { "Preferred": 36545, "Premium": 39545, "Premium Plus": 41545 },
+        "2026": { "Preferred": 34750, "Premium": 38150, "Premium Plus": 40450 }
       }
     },
     {

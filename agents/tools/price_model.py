@@ -1,38 +1,57 @@
 """
-Per-model ML fair-price estimator.
+Per-model stacked fair-price estimator.
 
-Trains one GradientBoostingRegressor per target vehicle (Tucson Hybrid,
-Sportage Hybrid, Tiguan, Envision). Each model learns that vehicle's specific
-depreciation curve, trim price ladder, and AWD premium independently —
-no cross-model contamination.
+Layer 1 — three base estimators, each capturing a different price signal:
+  GB    HistGradientBoostingRegressor with monotone constraints — non-linear interactions
+  KNN   distance-weighted k-nearest neighbours — local price cluster interpolation
+  Ridge additive Ridge(α=200) — smooth global surface, regularised anchor
 
-Features (no model identity needed — all training data is the same vehicle):
-  - year
-  - mileage  (log1p-scaled — compresses low-mileage premium to avoid over-rewarding near-new cars)
-  - trim_level  (ordinal 1-6 within that model)
-  - drivetrain  (0=FWD, 0.5=unknown, 1=AWD)
-  - powertrain  (0=gas, 0.8=hybrid, 1.0=PHEV/electric)
+Layer 2 — meta-blend
+  5-fold OOF predictions from all three base models are fed into a
+  Ridge(positive=True, fit_intercept=False) that learns convex blend weights
+  per vehicle slug.  Weights are normalised to sum=1 for interpretability.
 
-Saved as: agents/tools/price_model_{model_slug}.pkl
-Falls back to global model if per-model has insufficient data (<30 rows).
+SHAP waterfall still runs on the GB component (TreeExplainer requirement).
+Global fallback (< 30 rows) stays pure GB — cross-model stacking adds noise.
 
-Split models: vehicles in _POWERTRAIN_SPLIT (e.g. XC60) also train separate
-price_model_{slug}_gas.pkl and price_model_{slug}_phev.pkl so gas B5 and
-Recharge T8 PHEV depreciation curves don't bleed into each other.
-predict_fair_price() selects the right sub-model based on detected powertrain.
+Saved as: agents/tools/price_model_{model_slug}.pkl  (StackedModel dataclass)
+Split models: vehicles in _POWERTRAIN_SPLIT also train _gas / _phev variants.
 """
+import math
 import os
+from dataclasses import dataclass
 from datetime import datetime
 
 import joblib
 import numpy as np
 from sklearn.ensemble import HistGradientBoostingRegressor
+from sklearn.linear_model import Ridge
+from sklearn.model_selection import KFold
+from sklearn.neighbors import KNeighborsRegressor
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
 
 from tools.db import fetch_all
 from tools.scoring import detect_drivetrain, detect_powertrain
-from tools.base_trims import _VEHICLES as _VEH_LIST
+from tools.base_trims import _VEHICLES as _VEH_LIST, canonical_trim
+
+
+@dataclass
+class StackedModel:
+    """Drop-in sklearn-compatible wrapper holding the three base models + blend weights."""
+    gb:           Pipeline
+    knn:          Pipeline
+    ridge:        Pipeline
+    meta_weights: np.ndarray  # shape (3,) — GB, KNN, Ridge; normalised to sum=1
+
+    def predict(self, X) -> np.ndarray:
+        X = np.array(X)
+        base = np.column_stack([
+            self.gb.predict(X),
+            self.knn.predict(X),
+            self.ridge.predict(X),
+        ])
+        return base @ self.meta_weights
 
 # Target year range per model (from cars.json) — used to bound training data
 _MODEL_YEAR_RANGE: dict[str, tuple[int, int | None]] = {
@@ -47,33 +66,23 @@ _DIR = os.path.dirname(__file__)
 _MIN_ROWS = 30   # minimum training rows to fit a per-model estimator
 
 _TRIM_LEVELS: dict[str, dict[str, int]] = {
-    "tucson":           {"se": 1, "sel": 2, "sel convenience": 3, "xrt": 3, "n line": 4, "sel premium": 4, "limited": 5},
     "tucson hybrid":    {"blue": 1, "sel": 2, "sel convenience": 3, "n line": 4, "limited": 5, "sel n-line": 4},
-    "sportage":         {"lx": 1, "ex": 2, "sx": 3, "sx prestige": 4, "x-line": 4, "x-pro": 5, "x-pro prestige": 6, "prestige": 4},
     "sportage hybrid":  {"lx": 1, "ex": 2, "sx": 3, "sx prestige": 4, "x-line": 4, "x-pro": 5, "x-pro prestige": 6, "prestige": 4},
+    "sportage phev":    {"ex": 1, "ex premium": 2, "x-line": 3, "x-line prestige": 4, "sx": 5},
+    "gv70":             {"standard": 1, "select": 2, "advanced": 3, "advanced plus": 4, "sport prestige": 5},
     "tiguan":           {"s": 1, "se": 2, "se r-line": 3, "se r-line black": 4, "sel": 4, "sel premium": 5, "sel r-line black": 5},
     "envision":         {"preferred": 1, "sport touring": 2, "avenir": 3},
     "x1":               {"sdrive28i": 1, "xdrive28i": 2},
     "x3":               {"sdrive30i": 1, "xdrive30i": 2},
+    "xt4":              {"luxury": 1, "premium luxury": 2, "sport": 3},
     "nx 350h":          {"premium": 2, "luxury": 3, "f sport": 3},
     "xc40":             {"core": 1, "plus": 2, "ultimate": 3},
     "xc60":             {"core": 1, "plus": 2, "ultimate": 3},
     "xc60 recharge":   {"core": 1, "plus": 2, "ultimate": 3},
+    "cx-50 hybrid":    {"preferred": 1, "premium": 2, "premium plus": 3},
 }
 
 _ALL_MODELS = list(_TRIM_LEVELS.keys())
-
-# Models where gas and PHEV have sufficiently different depreciation curves to
-# warrant separate pkl files.  train() produces {slug}_gas.pkl + {slug}_phev.pkl
-# in addition to the combined {slug}.pkl (kept as fallback).
-# predict_fair_price() detects powertrain and selects the right sub-model.
-_POWERTRAIN_SPLIT: set[str] = set()  # XC60 gas/PHEV are now fully separate model entries
-
-
-def _split_pkl_path(model: str, powertrain: str) -> str:
-    """e.g. price_model_xc60_gas.pkl"""
-    pt_slug = "phev" if powertrain in ("phev", "electric", "hybrid") else "gas"
-    return os.path.join(_DIR, f"price_model_{_model_slug(model)}_{pt_slug}.pkl")
 
 
 def _model_slug(model: str) -> str:
@@ -96,6 +105,138 @@ def _trim_level(model: str, trim: str | None) -> float:
     return float(best) if best is not None else 2.5
 
 
+def _trim_premium(row: dict) -> float:
+    make = (row.get("make") or "").lower().strip()
+    model = (row.get("model") or "").lower().strip()
+    year = int(row.get("year") or _CURRENT_YEAR)
+    trim = row.get("trim")
+    raw = (row.get("raw") or {}).get("text") if isinstance(row.get("raw"), dict) else None
+    
+    # 1. Get canonical trim
+    canon_trim = canonical_trim(make, model, trim)
+    
+    # 2. Find vehicle config
+    v = None
+    for veg in _VEH_LIST:
+        if veg["model"].lower() == model:
+            v = veg
+            break
+            
+    if not v or "msrp" not in v:
+        current_ord = _trim_level(model, trim)
+        return float((current_ord - 1.0) * 2000.0)
+        
+    msrp_table = v["msrp"]
+    if not msrp_table:
+        current_ord = _trim_level(model, trim)
+        return float((current_ord - 1.0) * 2000.0)
+        
+    # Get closest year's MSRP list
+    year_str = str(year)
+    if year_str not in msrp_table:
+        years = sorted([int(y) for y in msrp_table.keys()])
+        if not years:
+            current_ord = _trim_level(model, trim)
+            return float((current_ord - 1.0) * 2000.0)
+        closest_yr = min(years, key=lambda y: abs(y - year))
+        year_str = str(closest_yr)
+        
+    msrp_year_table = msrp_table[year_str]
+    if not msrp_year_table:
+        current_ord = _trim_level(model, trim)
+        return float((current_ord - 1.0) * 2000.0)
+        
+    base_msrp = min(msrp_year_table.values())
+    
+    # Find matching key
+    import re
+    def normalize_for_msrp(t: str) -> str:
+        t = t.lower().strip().replace("-", "").replace(" ", "")
+        t = re.sub(r'^\d+(\.\d+)?[tTlLiIdDhH]', '', t)
+        t = re.sub(r'(awd|fwd)$', '', t)
+        return t
+        
+    drivetrain = _drivetrain_for(row, trim, model, raw)
+    dt_is_awd = (drivetrain == "awd")
+    
+    best_key = None
+    best_score = -1
+    canon_norm = normalize_for_msrp(canon_trim) if canon_trim else ""
+    
+    for key in msrp_year_table.keys():
+        key_norm = normalize_for_msrp(key)
+        if canon_norm and (canon_norm == key_norm or canon_norm in key_norm or key_norm in canon_norm):
+            score = 10
+            key_lower = key.lower()
+            key_has_awd = any(k in key_lower for k in ("awd", "4motion", "4x4", "xdrive"))
+            key_has_fwd = any(k in key_lower for k in ("fwd", "sdrive", "2wd"))
+            
+            if dt_is_awd and key_has_awd:
+                score += 5
+            elif not dt_is_awd and key_has_fwd:
+                score += 5
+            elif not key_has_awd and not key_has_fwd:
+                score += 2
+                
+            common_len = min(len(canon_norm), len(key_norm))
+            score += common_len
+            
+            if score > best_score:
+                best_score = score
+                best_key = key
+                
+    if best_key:
+        return float(msrp_year_table[best_key] - base_msrp)
+        
+    current_ord = _trim_level(model, trim)
+    return float((current_ord - 1.0) * 2000.0)
+
+
+def _is_cpo(row: dict) -> bool:
+    cpo_val = row.get("cpo")
+    if cpo_val is not None:
+        if isinstance(cpo_val, bool):
+            return cpo_val
+        if str(cpo_val).lower() in ("true", "1", "yes", "cpo"):
+            return True
+            
+    insights = row.get("insights")
+    if insights:
+        if isinstance(insights, dict):
+            if insights.get("cpo"):
+                return True
+        elif isinstance(insights, str):
+            try:
+                import json
+                ins_dict = json.loads(insights)
+                if ins_dict.get("cpo"):
+                    return True
+            except Exception:
+                pass
+                
+    cond = (row.get("condition") or "").lower().strip()
+    if cond == "cpo":
+        return True
+        
+    trim = (row.get("trim") or "").lower()
+    model = (row.get("model") or "").lower()
+    raw = row.get("raw") or {}
+    raw_text = ""
+    if isinstance(raw, dict):
+        raw_text = (raw.get("text") or "").lower()
+    elif isinstance(raw, str):
+        raw_text = raw.lower()
+        
+    text = f" {trim} {model} {raw_text} "
+    if any(k in text for k in (" cpo ", " certified ", "certified pre-owned", "certified preowned")):
+        if "carvana certified" in text or "carmax certified" in text:
+            subtext = text.replace("carvana certified", "").replace("carmax certified", "")
+            return any(k in subtext for k in (" cpo ", " certified ", "certified pre-owned", "certified preowned"))
+        return True
+        
+    return False
+
+
 def _mileage_bucket(miles: float) -> float:
     """Convert odometer to a 4-level ordinal (0=low, 3=very high).
     Prevents the model from over-weighting small low-mileage differences:
@@ -114,21 +255,27 @@ def _mileage_bucket(miles: float) -> float:
 # Trim-level drivetrain overrides — when the trim name alone determines drivetrain.
 # Checked before keyword detection; keyed by (make.lower(), model.lower(), trim.lower()).
 _TRIM_DRIVETRAIN: dict[tuple[str, str, str], str] = {
-    ("volkswagen", "tiguan", "sel r-line"): "awd",  # SEL R-Line is 4MOTION AWD only
+    ("volkswagen", "tiguan",          "sel r-line"): "awd",  # SEL R-Line is 4MOTION AWD only
+    ("kia",        "sportage hybrid", "x-line"):     "awd",  # X-Line is AWD-only across all years
+    ("kia",        "sportage hybrid", "sx prestige"):"awd",  # SX Prestige is AWD-only across all years
 }
 
 # Model-year combinations where drivetrain is known regardless of trim text.
 # Use make.lower() + model.lower() + min_year as key.
 _DRIVETRAIN_DEFAULTS: dict[tuple[str, str, int], str] = {
-    ("buick",   "envision",        2025): "awd",  # 2025+ Envision is AWD-only
+    ("buick",   "envision",        2024): "awd",  # 2024+ Envision is AWD-only
     ("hyundai", "tucson hybrid",   2025): "awd",  # 2025+ Tucson Hybrid is AWD-only
     ("kia",     "sportage hybrid", 2026): "awd",  # 2026 Sportage Hybrid EX/SX Prestige are AWD-only
-    ("lexus",   "nx 350h",         2023): "awd",  # NX 350h is AWD-only in US
+    ("kia",     "sportage phev",   2023): "awd",  # Sportage PHEV is AWD-only (all years)
+    ("genesis", "gv70",            2022): "awd",  # GV70 is AWD-only in US (all trims)
+    ("lexus",   "nx 350h",         2022): "awd",  # NX 350h is AWD-only in US (from 2022 launch)
     ("bmw",     "x1",              2023): "awd",  # 2023–2025 X1 only has xDrive28i (M35i excluded)
     ("bmw",     "x3",              2025): "awd",  # 2025 X3 only has xDrive30i
-    ("volvo",   "xc60",            2023): "awd",  # XC60 B5/B6/T8 all AWD
+    ("volvo",   "xc60",            2024): "awd",  # 2024+ XC60 all AWD; 2023 B5 can be FWD — detect from trim
     ("volvo",   "xc60 recharge",  2023): "awd",  # XC60 Recharge T8 eAWD
-    # XC40: B4 can be FWD, B5 is AWD — detect from trim text, no default override
+    ("volvo",   "xc40",           2024): "awd",  # 2024+ XC40: B4 FWD dropped, all variants AWD
+    # XC40 2023: B4=FWD, B5 FWD or AWD — detect from raw trim text
+    ("mazda",   "cx-50 hybrid",   2024): "awd",  # CX-50 Hybrid is i-ACTIV AWD on all trims
 }
 
 
@@ -149,34 +296,49 @@ def _drivetrain_for(row: dict, trim: str | None, model: str, raw: str | None) ->
     return row.get("drivetrain") or detect_drivetrain(trim, model, raw)
 
 
+def resolve_drivetrain(listing: dict) -> str:
+    """Public wrapper: return the effective drivetrain for a listing, applying all overrides."""
+    model = (listing.get("model") or "").lower()
+    trim  = listing.get("trim")
+    raw   = (listing.get("raw") or {}).get("text") if isinstance(listing.get("raw"), dict) else None
+    return _drivetrain_for(listing, trim, model, raw)
+
+
 def _to_features(row: dict) -> list[float]:
     model = (row.get("model") or "").lower()
     trim  = row.get("trim")
     raw   = (row.get("raw") or {}).get("text") if isinstance(row.get("raw"), dict) else None
-    raw_mileage = float(15_000 if row.get("mileage") is None else row.get("mileage"))
+    
+    if row.get("mileage") is None:
+        vehicle_year = int(row.get("year") or _CURRENT_YEAR)
+        age_years = max(1, _CURRENT_YEAR - vehicle_year + 1)
+        raw_mileage = float(min(80_000, age_years * 12_000))
+    else:
+        raw_mileage = float(row.get("mileage"))
+        
     return [
         float(row.get("year") or 2025),
-        _mileage_bucket(raw_mileage),  # coarse buckets: 0-15k / 15k-30k / 30k-60k / 60k+
-        _trim_level(model, trim),
+        math.log1p(raw_mileage),
+        _trim_premium(row),
         {"awd": 1.0, "fwd": 0.0, "unknown": 0.5}[_drivetrain_for(row, trim, model, raw)],
         {"electric": 1.0, "phev": 1.0, "hybrid": 0.8, "gas": 0.0}[
             row.get("powertrain") or detect_powertrain(trim, model, raw)],
+        1.0 if _is_cpo(row) else 0.0,
     ]
 
 
-# Feature order: [year, mileage, trim_level, drivetrain, powertrain]
+# Feature order: [year, mileage, trim_premium, drivetrain, powertrain, cpo]
 # Monotone constraints enforce economic common sense:
 #   year (+1): newer = more expensive
 #   mileage (-1): more miles = less expensive
-#   trim_level (+1): higher trim = more expensive
+#   trim_premium (+1): higher trim = more expensive
 #   drivetrain (+1): AWD > FWD
 #   powertrain (+1): hybrid/EV > gas
-_MONOTONIC_CST = [1, -1, 1, 1, 1]  # year+, mileage-, trim_level+, drivetrain+, powertrain+
+#   cpo (+1): CPO > non-CPO
+_MONOTONIC_CST = [1, -1, 1, 1, 1, 1]  # year+, mileage-, trim_premium+, drivetrain+, powertrain+, cpo+
 
 
-def _make_pipeline() -> Pipeline:
-    # HistGradientBoostingRegressor is faster than GBR and supports monotone_cst.
-    # StandardScaler is a no-op for tree models but kept for interface consistency.
+def _make_gb_pipeline() -> Pipeline:
     return Pipeline([
         ("scaler", StandardScaler()),
         ("gbr", HistGradientBoostingRegressor(
@@ -186,11 +348,26 @@ def _make_pipeline() -> Pipeline:
         )),
     ])
 
+# Keep old name so any external callers still work.
+_make_pipeline = _make_gb_pipeline
 
-# Models where the listings table has known source contamination (e.g. CarGurus hybrid
-# pages serving non-hybrid listings). For these, training uses only price_training_data,
-# which is collected via validated model-specific queries in training_collector.py.
-_LISTINGS_EXCLUDED_MODELS = {"tucson hybrid"}
+
+def _make_knn_pipeline(n: int) -> Pipeline:
+    k = min(7, max(3, n // 10))
+    return Pipeline([
+        ("scaler", StandardScaler()),
+        ("knn", KNeighborsRegressor(n_neighbors=k, weights="distance")),
+    ])
+
+
+def _make_ridge_pipeline() -> Pipeline:
+    return Pipeline([
+        ("scaler", StandardScaler()),
+        ("ridge", Ridge(alpha=200)),
+    ])
+
+
+
 
 
 # Models where older inventory is a different vehicle platform — exclude pre-platform rows
@@ -198,14 +375,18 @@ _LISTINGS_EXCLUDED_MODELS = {"tucson hybrid"}
 _PLATFORM_MIN_YEAR: dict[str, int] = {
     "tucson hybrid":   2022,  # TNGA-K hybrid platform gen launched 2022
     "sportage hybrid": 2023,  # NQ5 platform launched 2023
+    "sportage phev":   2023,  # PHEV also on NQ5 platform (launched 2023)
+    "gv70":            2022,  # JX1 platform launched 2022 for US
     "tiguan":          2022,  # MK2 LCI refresh 2022 (new interior/features)
     "envision":        2021,  # 2nd gen launched 2021; 2020 is first gen
     "x1":              2023,  # U11 gen launched 2023; F48 (2016-2022) is a different car
     "x3":              2022,  # G01 LCI refresh 2022
+    "xt4":             2024,  # target is 2024-2025 only; no earlier-gen data needed
     "nx 350h":         2022,  # TNGA-K gen launched 2022; prior NX hybrids are different generation
     "xc40":            2023,  # CMA platform refresh; 2022 and earlier is a different gen
     "xc60":            2023,  # SPA platform refresh for 2023+
     "xc60 recharge":   2023,  # Recharge T8 PHEV also on SPA refresh platform
+    "cx-50 hybrid":    2024,  # CX-50 Hybrid launched 2024; no prior-gen hybrid data
 }
 
 
@@ -227,51 +408,49 @@ def load_training_data_for(model_name: str, powertrain_filter: str | None = None
     pt_params    = [powertrain_filter] if powertrain_filter else []
 
     train_rows = fetch_all(f"""
-        WITH price_floors AS (
+        WITH price_bounds AS (
             SELECT cte.year,
-                   PERCENTILE_CONT(0.10) WITHIN GROUP (ORDER BY cte.price)::int AS p10
+                   PERCENTILE_CONT(0.10) WITHIN GROUP (ORDER BY cte.price)::int AS p10,
+                   PERCENTILE_CONT(0.97) WITHIN GROUP (ORDER BY cte.price)::int AS p97
             FROM price_training_data cte
             WHERE lower(cte.model) = %s
-              AND cte.price BETWEEN 20000 AND {max_price} AND cte.mileage <= 80000
+              AND cte.price BETWEEN 20000 AND {max_price} AND cte.mileage BETWEEN 100 AND 80000
               AND cte.year >= %s {cte_max_yr}
-              AND (cte.year IS NULL OR cte.mileage::float / (%s - cte.year + 1) <= 14000)
+              AND (cte.year IS NULL OR cte.mileage::float / GREATEST(1, %s - cte.year + 1) <= 14000)
               {cte_pt_sql}
             GROUP BY cte.year
             HAVING count(*) >= 5
         )
-        SELECT ptd.make, ptd.model, ptd.year, ptd.mileage, ptd.price, ptd.trim, ptd.powertrain
+        SELECT ptd.make, ptd.model, ptd.year, ptd.mileage, ptd.price, ptd.trim, ptd.powertrain, ptd.drivetrain, ptd.cpo
         FROM price_training_data ptd
-        JOIN price_floors pf ON ptd.year = pf.year
+        JOIN price_bounds pb ON ptd.year = pb.year
         WHERE lower(ptd.model) = %s
           AND ptd.price IS NOT NULL AND ptd.mileage IS NOT NULL
-          AND ptd.price BETWEEN 20000 AND {max_price} AND ptd.mileage <= 80000
+          AND ptd.price BETWEEN 20000 AND {max_price} AND ptd.mileage BETWEEN 100 AND 80000
           AND ptd.year >= %s {join_max_yr}
-          AND ptd.mileage::float / (%s - ptd.year + 1) <= 14000
-          AND ptd.price >= pf.p10
+          AND ptd.mileage::float / GREATEST(1, %s - ptd.year + 1) <= 14000
+          AND ptd.price BETWEEN pb.p10 AND pb.p97
           {join_pt_sql}
     """, (key, effective_min, *max_year_params, _CURRENT_YEAR, *pt_params,
           key, effective_min, *max_year_params, _CURRENT_YEAR, *pt_params))
 
-    if key in _LISTINGS_EXCLUDED_MODELS:
-        rows = list(train_rows)
-    else:
-        max_yr_sql = f"AND year <= {target_max}" if target_max else ""
-        listing_rows = fetch_all(f"""
-            SELECT make, model, year, mileage, price, trim FROM listings
-            WHERE price IS NOT NULL AND mileage IS NOT NULL
-              AND condition = 'used' AND price BETWEEN 20000 AND {max_price}
-              AND mileage <= 80000 AND lower(model) = %s
-              AND year >= %s {max_yr_sql}
-        """, (key, effective_min))
-        rows = list(train_rows) + list(listing_rows)
-        # For split models, filter listings by detected powertrain
-        if powertrain_filter:
-            pt_slug = "phev" if powertrain_filter in ("phev", "electric", "hybrid") else "gas"
-            rows = [
-                r for r in rows
-                if (r.get("powertrain") or detect_powertrain(r.get("trim"), r.get("model"))) == pt_slug
-                or (r.get("powertrain") or detect_powertrain(r.get("trim"), r.get("model"))) == powertrain_filter
-            ]
+    max_yr_sql = f"AND year <= {target_max}" if target_max else ""
+    listing_rows = fetch_all(f"""
+        SELECT make, model, year, mileage, price, trim, (insights->>'cpo')::boolean AS cpo, raw FROM listings
+        WHERE price IS NOT NULL AND mileage IS NOT NULL
+          AND condition = 'used' AND price BETWEEN 20000 AND {max_price}
+          AND mileage BETWEEN 100 AND 80000 AND lower(model) = %s
+          AND year >= %s {max_yr_sql}
+    """, (key, effective_min))
+    rows = list(train_rows) + list(listing_rows)
+    # For split models, filter listings by detected powertrain
+    if powertrain_filter:
+        pt_slug = "phev" if powertrain_filter in ("phev", "electric", "hybrid") else "gas"
+        rows = [
+            r for r in rows
+            if (r.get("powertrain") or detect_powertrain(r.get("trim"), r.get("model"))) == pt_slug
+            or (r.get("powertrain") or detect_powertrain(r.get("trim"), r.get("model"))) == powertrain_filter
+        ]
 
     X, y = [], []
     for row in rows:
@@ -284,18 +463,53 @@ def load_training_data_for(model_name: str, powertrain_filter: str | None = None
     return X, y
 
 
-def _fit_and_report(model_name: str, X: list, y: list, label: str, pkl_path: str, save: bool) -> Pipeline | None:
+def _fit_stacked(model_name: str, X: list, y: list, label: str, pkl_path: str, save: bool) -> StackedModel | None:
+    """Fit a stacked ensemble (GB + KNN + Ridge) with OOF meta-blend weights."""
     if len(X) < _MIN_ROWS:
         print(f"  [{label}] only {len(X)} rows — skipping (needs {_MIN_ROWS}+)")
         return None
-    pipe = _make_pipeline()
-    pipe.fit(X, y)
-    preds  = pipe.predict(X)
-    errors = np.abs(np.array(preds) - np.array(y))
-    print(f"  [{label}] n={len(X)}  MAE=${np.mean(errors):,.0f}  max=${np.max(errors):,.0f}")
+
+    X_arr = np.array(X, dtype=float)
+    y_arr = np.array(y, dtype=float)
+    n     = len(X_arr)
+
+    gb_pipe    = _make_gb_pipeline()
+    knn_pipe   = _make_knn_pipeline(n)
+    ridge_pipe = _make_ridge_pipeline()
+
+    # OOF predictions for meta-learner (5 folds, min 2 folds for tiny datasets)
+    n_splits = max(2, min(5, n // 6))
+    kf  = KFold(n_splits=n_splits, shuffle=True, random_state=42)
+    oof = np.zeros((n, 3))
+    for tr_idx, val_idx in kf.split(X_arr):
+        X_tr, X_val = X_arr[tr_idx], X_arr[val_idx]
+        y_tr = y_arr[tr_idx]
+        gb_pipe.fit(X_tr, y_tr);    oof[val_idx, 0] = gb_pipe.predict(X_val)
+        knn_pipe.fit(X_tr, y_tr);   oof[val_idx, 1] = knn_pipe.predict(X_val)
+        ridge_pipe.fit(X_tr, y_tr); oof[val_idx, 2] = ridge_pipe.predict(X_val)
+
+    # Meta Ridge: positive weights, no intercept → convex-ish blend
+    meta = Ridge(alpha=10.0, fit_intercept=False, positive=True)
+    meta.fit(oof, y_arr)
+    raw_w = meta.coef_
+    meta_weights = raw_w / raw_w.sum()
+
+    # Refit base models on full data
+    gb_pipe.fit(X_arr, y_arr)
+    knn_pipe.fit(X_arr, y_arr)
+    ridge_pipe.fit(X_arr, y_arr)
+
+    stacked = StackedModel(gb=gb_pipe, knn=knn_pipe, ridge=ridge_pipe, meta_weights=meta_weights)
+
+    gb_mae    = np.mean(np.abs(gb_pipe.predict(X_arr) - y_arr))
+    stack_mae = np.mean(np.abs(stacked.predict(X_arr) - y_arr))
+    w = meta_weights
+    print(f"  [{label}] n={n}  GB MAE=${gb_mae:,.0f}  Stack MAE=${stack_mae:,.0f}"
+          f"  w=[GB={w[0]:.2f} KNN={w[1]:.2f} Ridge={w[2]:.2f}]")
+
     if save:
-        joblib.dump(pipe, pkl_path)
-    return pipe
+        joblib.dump(stacked, pkl_path)
+    return stacked
 
 
 def train(save: bool = True) -> dict[str, Pipeline]:
@@ -308,18 +522,9 @@ def train(save: bool = True) -> dict[str, Pipeline]:
         all_X.extend(X)
         all_y.extend(y)
 
-        pipe = _fit_and_report(model_name, X, y, model_name, _pkl_path(model_name), save)
+        pipe = _fit_stacked(model_name, X, y, model_name, _pkl_path(model_name), save)
         if pipe:
             fitted[model_name] = pipe
-
-        # For split models, also train powertrain-specific sub-models
-        if model_name in _POWERTRAIN_SPLIT:
-            for pt in ("gas", "phev"):
-                X_pt, y_pt = load_training_data_for(model_name, powertrain_filter=pt)
-                label = f"{model_name}/{pt}"
-                sub_pipe = _fit_and_report(model_name, X_pt, y_pt, label, _split_pkl_path(model_name, pt), save)
-                if sub_pipe:
-                    fitted[f"{model_name}_{pt}"] = sub_pipe
 
     # Global fallback trained on all data combined
     if len(all_X) >= _MIN_ROWS:
@@ -367,16 +572,6 @@ def predict_fair_price(listing: dict) -> int | None:
     model_name = (listing.get("model") or "").lower().strip()
     features   = [_to_features(listing)]
 
-    # For split models, prefer the powertrain-specific sub-model
-    if model_name in _POWERTRAIN_SPLIT:
-        pt = _detect_powertrain_for(listing)
-        split_model = _load_model(_split_pkl_path(model_name, pt))
-        if split_model is not None:
-            try:
-                return int(round(split_model.predict(features)[0]))
-            except Exception:
-                pass
-
     model = _load_model(_pkl_path(model_name))
     if model is not None:
         try:
@@ -396,6 +591,7 @@ def predict_fair_price(listing: dict) -> int | None:
 
 _DRIVETRAIN_LABEL = {1.0: "AWD", 0.0: "FWD", 0.5: "Unknown drivetrain"}
 _POWERTRAIN_LABEL = {1.0: "Electric/PHEV", 0.8: "Hybrid", 0.0: "Gas"}
+_CPO_LABEL = {1.0: "Certified Pre-Owned (CPO)", 0.0: "Non-CPO"}
 
 
 def explain_listing(listing: dict) -> dict | None:
@@ -411,6 +607,7 @@ def explain_listing(listing: dict) -> dict | None:
             {"label": "Trim XLE",       "delta": -200, "raw": 2},
             {"label": "AWD",            "delta": 900,  "raw": 1.0},
             {"label": "Hybrid",         "delta": 400,  "raw": 0.8},
+            {"label": "CPO",            "delta": 500,  "raw": 1.0},
           ]
         }
     Only includes features with |delta| >= $50 to avoid noise.
@@ -426,20 +623,16 @@ def explain_listing(listing: dict) -> dict | None:
     raw_features = _to_features(listing)
     X_raw = _np.array([raw_features])
 
-    pipe = None
-    if model_name in _POWERTRAIN_SPLIT:
-        pt = _detect_powertrain_for(listing)
-        pipe = _load_model(_split_pkl_path(model_name, pt))
-    if pipe is None:
-        pipe = _load_model(_pkl_path(model_name))
+    pipe = _load_model(_pkl_path(model_name))
     if pipe is None:
         pipe = _load_model(_pkl_path("_global"))
     if pipe is None:
         return None
 
     try:
-        scaler = pipe.named_steps["scaler"]
-        gbr    = pipe.named_steps["gbr"]
+        gb_pipe = pipe.gb if isinstance(pipe, StackedModel) else pipe
+        scaler = gb_pipe.named_steps["scaler"]
+        gbr    = gb_pipe.named_steps["gbr"]
         X_scaled = scaler.transform(X_raw)
 
         explainer  = _shap.TreeExplainer(gbr)
@@ -449,13 +642,21 @@ def explain_listing(listing: dict) -> dict | None:
         predicted  = int(round(base_value + shap_vals.sum()))
 
         year           = int(raw_features[0])
-        # raw_features[1] is the mileage bucket (0-3) — show actual miles in label
-        mileage_actual = int(15_000 if listing.get("mileage") is None else listing.get("mileage"))
+        # raw_features[1] is log1p(miles) — show actual miles in label
+        if listing.get("mileage") is None:
+            vehicle_year = int(listing.get("year") or _CURRENT_YEAR)
+            age_years = max(1, _CURRENT_YEAR - vehicle_year + 1)
+            mileage_actual = int(min(80_000, age_years * 12_000))
+        else:
+            mileage_actual = int(listing.get("mileage"))
         trim_lvl   = raw_features[2]
         drivetrain = raw_features[3]
         powertrain = raw_features[4]
+        cpo        = raw_features[5]
 
-        trim_name = listing.get("trim") or f"Level {trim_lvl:.0f}"
+        # Use the original ordinal trim level for fallback naming if trim is None
+        trim_ord = _trim_level(model_name, listing.get("trim"))
+        trim_name = listing.get("trim") or f"Level {trim_ord:.0f}"
 
         raw_labels = [
             (f"Year {year}",                  raw_features[0]),
@@ -463,6 +664,7 @@ def explain_listing(listing: dict) -> dict | None:
             (f"Trim — {trim_name[:25]}",      trim_lvl),
             (_DRIVETRAIN_LABEL.get(drivetrain, "Drivetrain"), drivetrain),
             (_POWERTRAIN_LABEL.get(powertrain, "Powertrain"), powertrain),
+            (_CPO_LABEL.get(cpo, "CPO Status"), cpo),
         ]
 
         features = [
@@ -471,10 +673,25 @@ def explain_listing(listing: dict) -> dict | None:
             if abs(sv) >= 50  # skip noise
         ]
 
+        if isinstance(pipe, StackedModel):
+            gb_pred = int(round(pipe.gb.predict(X_raw)[0]))
+            knn_pred = int(round(pipe.knn.predict(X_raw)[0]))
+            ridge_pred = int(round(pipe.ridge.predict(X_raw)[0]))
+            meta_weights = [float(w) for w in pipe.meta_weights]
+        else:
+            gb_pred = int(round(pipe.predict(X_raw)[0]))
+            knn_pred = None
+            ridge_pred = None
+            meta_weights = [1.0, 0.0, 0.0]
+
         return {
             "base_value": int(round(base_value)),
             "predicted":  predicted,
             "features":   features,
+            "gb_pred":    gb_pred,
+            "knn_pred":   knn_pred,
+            "ridge_pred": ridge_pred,
+            "meta_weights": meta_weights,
         }
     except Exception:
         return None

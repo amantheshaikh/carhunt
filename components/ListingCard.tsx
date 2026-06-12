@@ -62,13 +62,13 @@ export default function ListingCard({ listing: l, selected, onSelect, onAction, 
           </div>
 
           {/* Trim + drivetrain + powertrain */}
-          {(l.trim || getDrivetrain(l.trim, l.model) || getPowertrain(l.trim, l.model)) && (
+          {(l.trim || getDrivetrain(l.trim, l.model, l.drivetrain) || getPowertrain(l.trim, l.model)) && (
             <div className="flex items-center gap-1.5 mt-0.5 flex-wrap">
               {l.trim && (
                 <span className="text-xs text-zinc-400">{l.trim}</span>
               )}
               {(() => {
-                const dt = getDrivetrain(l.trim, l.model);
+                const dt = getDrivetrain(l.trim, l.model, l.drivetrain);
                 const pt = getPowertrain(l.trim, l.model);
                 return (
                   <>
@@ -94,11 +94,11 @@ export default function ListingCard({ listing: l, selected, onSelect, onAction, 
               ? <span className="text-emerald-600">0 mi (new)</span>
               : l.mileage ? <span>{l.mileage.toLocaleString()} mi</span> : null
             }
-            {l.condition !== "new" && l.market_median_price && (
-              <span className={l.price < l.market_median_price ? "text-green-600" : "text-zinc-500"}>
-                {l.price < l.market_median_price
-                  ? `$${(l.market_median_price - l.price).toLocaleString()} below market`
-                  : `$${(l.price - l.market_median_price).toLocaleString()} above market`}
+            {l.condition !== "new" && l.fair_price && (
+              <span className={l.price < l.fair_price ? "text-green-600" : "text-zinc-500"}>
+                {l.price < l.fair_price
+                  ? `$${(l.fair_price - l.price).toLocaleString()} below market`
+                  : `$${(l.price - l.fair_price).toLocaleString()} above market`}
               </span>
             )}
             <span className="text-zinc-600">{{
@@ -165,7 +165,6 @@ export default function ListingCard({ listing: l, selected, onSelect, onAction, 
           >
             Snooze 7d
           </button>
-          <ContactButton listingId={l.id} listingUrl={l.listing_url} />
         </div>
       )}
       {tab === "dismissed" && (
@@ -182,27 +181,3 @@ export default function ListingCard({ listing: l, selected, onSelect, onAction, 
   );
 }
 
-function ContactButton({ listingId, listingUrl }: { listingId: string; listingUrl: string }) {
-  const handleContact = async (e: React.MouseEvent) => {
-    e.stopPropagation();
-    const res = await fetch("/api/contact", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ listing_id: listingId }),
-    });
-    const data = await res.json();
-    if (data.inquiry_text) {
-      await navigator.clipboard.writeText(data.inquiry_text);
-      window.open(listingUrl, "_blank");
-    }
-  };
-
-  return (
-    <button
-      onClick={handleContact}
-      className="px-3 py-1 text-xs bg-blue-900 hover:bg-blue-800 text-blue-200 rounded-lg transition-colors"
-    >
-      Contact Dealer
-    </button>
-  );
-}

@@ -37,29 +37,41 @@ listings
   body_type text       -- 'sedan' | 'suv' | 'crossover'
   mileage int, price int
   dealer_name text, dealer_phone text, listing_url text
-  status text          -- 'new'|'active'|'contacted'|'dismissed'|'purchased'
+  status text          -- 'new'|'active'|'dismissed'
   title_status text    -- 'clean'|'salvage'|'rebuilt'|'flood'|'lemon'|'unknown'
   accident_count int
   is_pinned bool
   first_seen_at timestamptz, last_seen_at timestamptz
+  insights jsonb       -- JSON data containing:
+                       --   "cpo": boolean (is it Certified Pre-Owned?)
+                       --   "packages": text[] (array of option packages, e.g. ["Premium Package"]. Names vary in casing/phrasing, so always do case-insensitive substring searches using EXISTS and ILIKE)
+                       --   "price_drop": int or null (dollar drop in price)
+                       --   "owner_notes": text or null (notable notes)
 
 listing_scores
   listing_id uuid FK → listings.id
   value_score numeric       -- 0-100; pure price deviation from ML fair value
-  market_median_price int   -- ML-predicted fair price (encodes year/mileage/trim/drivetrain/powertrain)
+  fair_price          int   -- ML-predicted fair price (encodes year/mileage/trim/drivetrain/powertrain)
   market_price_source text  -- 'ml_model'
 
-contact_log
-  id uuid PK
-  listing_id uuid FK → listings.id
-  contacted_at timestamptz
-  channel text         -- 'contact_form'|'phone'|'other'
-  note text            -- freeform notes the user added
+Common query patterns:
+  - Query listings with a specific package (e.g. 'technology'), joining scores and fetching packages:
+    SELECT l.make, l.model, l.year, l.price, l.mileage, ls.value_score, l.insights -> 'packages' AS packages
+    FROM listings l
+    LEFT JOIN listing_scores ls ON ls.listing_id = l.id
+    WHERE l.status = 'active'
+      AND EXISTS (SELECT 1 FROM jsonb_array_elements_text(l.insights -> 'packages') p WHERE p ILIKE '%technology%')
+    ORDER BY l.price ASC
+    LIMIT 20;
 
-Common join pattern:
-  SELECT l.*, ls.value_score, ls.market_median_price, ls.market_price_source, ls.shap_values
-  FROM listings l
-  LEFT JOIN listing_scores ls ON ls.listing_id = l.id
+  - Query listings that are Certified Pre-Owned (CPO):
+    SELECT l.make, l.model, l.year, l.price, l.mileage, ls.value_score
+    FROM listings l
+    LEFT JOIN listing_scores ls ON ls.listing_id = l.id
+    WHERE l.status = 'active'
+      AND (l.insights ->> 'cpo')::boolean = true
+    ORDER BY l.price ASC
+    LIMIT 20;
 """
 
 SYSTEM = f"""You are a car-deal assistant for a personal car shopping tracker called CarHunt.
@@ -71,6 +83,7 @@ Rules:
 - Only run SELECT queries. Never UPDATE, INSERT, DELETE, or DROP.
 - Limit results to 20 rows unless the user explicitly asks for more.
 - When listing cars, always include make, model, year, price, mileage, and value_score.
+- When filtering by option packages (in the `insights -> 'packages'` array), ALWAYS use case-insensitive substring matching (via the `EXISTS` and `jsonb_array_elements_text` pattern with `ILIKE`, e.g. `%technology%`) rather than containment (`@>`) or exact checks (`?`), because package names vary in casing and phrasing (e.g. "CONVENIENCE PACKAGE" vs "Convenience Package" vs "SEL Convenience").
 - Be concise. Answer in 1-3 sentences max, then list results if relevant.
 - If a query returns no rows, say so plainly.
 - Use plain dollars (e.g. "$24,500") not raw numbers when talking about prices.
@@ -104,12 +117,16 @@ _FORBIDDEN = re.compile(
 
 def _query_db(sql: str) -> str:
     sql = sql.strip()
+    print(f"Executing SQL: {sql}", file=sys.stderr)
     if not sql.upper().startswith("SELECT"):
         return json.dumps({"error": "Only SELECT queries are permitted."})
     if _FORBIDDEN.search(sql):
         return json.dumps({"error": "Query contains forbidden keywords."})
     try:
-        rows = fetch_all(sql)
+        # psycopg2 uses % as a placeholder character. Since we pass no params,
+        # we must escape % as %% so psycopg2 doesn't raise a formatting error.
+        escaped_sql = sql.replace("%", "%%")
+        rows = fetch_all(escaped_sql)
         return json.dumps([dict(r) for r in rows[:20]], default=str)
     except Exception as e:
         return json.dumps({"error": str(e)})
@@ -129,22 +146,39 @@ def _assistant_msg(msg) -> dict:
     return d
 
 
-def run(question: str) -> dict:
+def run(question_or_history) -> dict:
     messages = [
         {"role": "system", "content": SYSTEM},
-        {"role": "user", "content": question},
     ]
+    if isinstance(question_or_history, list):
+        for msg in question_or_history:
+            if msg.get("content"):
+                messages.append({
+                    "role": msg["role"],
+                    "content": msg["content"]
+                })
+    else:
+        messages.append({
+            "role": "user",
+            "content": str(question_or_history)
+        })
 
     last_sql = None
     last_rows = []
 
-    while True:
+    loop_count = 0
+    max_loops = 5
+    while loop_count < max_loops:
+        loop_count += 1
         response = client.chat.completions.create(
             model=MODEL,
             messages=messages,
             tools=TOOLS,
+            max_tokens=500,
         )
         msg = response.choices[0].message
+        print(f"Assistant content: {msg.content}", file=sys.stderr)
+        print(f"Assistant tool calls: {msg.tool_calls}", file=sys.stderr)
         messages.append(_assistant_msg(msg))
 
         if response.choices[0].finish_reason != "tool_calls" or not msg.tool_calls:
@@ -157,6 +191,7 @@ def run(question: str) -> dict:
         for tc in msg.tool_calls:
             inputs = json.loads(tc.function.arguments)
             result = _query_db(inputs["sql"])
+            print(f"Tool result: {result}", file=sys.stderr)
             last_sql = inputs["sql"]
             try:
                 last_rows = json.loads(result)
@@ -166,10 +201,30 @@ def run(question: str) -> dict:
                 last_rows = []
             messages.append({"role": "tool", "tool_call_id": tc.id, "content": result})
 
+    return {
+        "answer": "I reached the maximum limit of database queries while trying to answer your question.",
+        "sql": last_sql,
+        "rows": last_rows,
+    }
+
 
 if __name__ == "__main__":
+    # Check if we have piped input on stdin
+    if not sys.stdin.isatty():
+        try:
+            input_data = sys.stdin.read().strip()
+            if input_data:
+                payload = json.loads(input_data)
+                result = run(payload)
+                print(json.dumps(result, default=str))
+                sys.exit(0)
+        except Exception as e:
+            print(json.dumps({"error": f"Failed to parse stdin JSON: {str(e)}"}))
+            sys.exit(1)
+
+    # Fallback to command-line arguments
     if len(sys.argv) < 2:
-        print(json.dumps({"error": "No question provided"}))
+        print(json.dumps({"error": "No question provided via CLI arguments or stdin"}))
         sys.exit(1)
     question = " ".join(sys.argv[1:])
     result = run(question)

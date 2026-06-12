@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { query, queryOne } from "@/lib/db";
-import type { Listing, ContactLog } from "@/lib/types";
+import type { Listing } from "@/lib/types";
 import { spawn } from "child_process";
 import fs from "fs";
 
@@ -8,7 +8,7 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ id: 
   const { id } = await params;
 
   const listing = await queryOne<Listing>(
-    `SELECT l.*, ls.value_score, ls.market_median_price, ls.market_price_source, ls.shap_values
+    `SELECT l.*, ls.value_score, ls.fair_price, ls.market_price_source, ls.shap_values
      FROM listings l
      LEFT JOIN listing_scores ls ON ls.listing_id = l.id
      WHERE l.id = $1`,
@@ -16,12 +16,7 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ id: 
   );
   if (!listing) return NextResponse.json({ error: "Not found" }, { status: 404 });
 
-  const contactLog = await query<ContactLog>(
-    "SELECT * FROM contact_log WHERE listing_id = $1 ORDER BY contacted_at DESC",
-    [id]
-  );
-
-  return NextResponse.json({ listing, contactLog });
+  return NextResponse.json(listing);
 }
 
 export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
@@ -66,7 +61,8 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
     const venvPython = process.env.AGENTS_PYTHON ?? "python3";
     if (fs.existsSync(venvPython)) {
       const child = spawn(venvPython, ["-u", "analysis_agent.py"], {
-        cwd: agentsDir, detached: true,
+        cwd: agentsDir,
+        detached: true,
         stdio: "ignore",
         env: { ...process.env, PYTHONUNBUFFERED: "1" },
       });

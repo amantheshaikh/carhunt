@@ -1,9 +1,7 @@
 export type ListingStatus =
   | "new"
   | "active"
-  | "contacted"
-  | "dismissed"
-  | "purchased";
+  | "dismissed";
 
 export interface Listing {
   id: string;
@@ -37,24 +35,21 @@ export interface Listing {
     price_drop: number | null;
     owner_notes: string | null;
   } | null;
-  // joined from listing_scores
+  // joined from listing_scores (Stacked Ensemble model)
   value_score: number | null;
-  market_median_price: number | null;
+  fair_price: number | null;
   market_price_source: string | null;
   shap_values: {
     base_value: number;
     predicted: number;
     features: { label: string; delta: number; raw: number }[];
+    gb_pred?: number;
+    knn_pred?: number | null;
+    ridge_pred?: number | null;
+    meta_weights?: number[];
   } | null;
 }
 
-export interface ContactLog {
-  id: string;
-  listing_id: string;
-  contacted_at: string;
-  channel: string;
-  note: string | null;
-}
 
 export interface RefreshLog {
   id: string;

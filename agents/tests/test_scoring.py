@@ -47,6 +47,16 @@ def test_powertrain_phev():
 def test_powertrain_electric():
     assert detect_powertrain("IONIQ 6 SEL", None) == "electric"
 
+def test_powertrain_t8_boundary():
+    assert detect_powertrain("T8", None) == "phev"
+    assert detect_powertrain("T8 Ultimate", None) == "phev"
+    assert detect_powertrain("Recharge T8", None) == "phev"
+
+def test_powertrain_ev_boundary():
+    assert detect_powertrain("EV", None) == "electric"
+    assert detect_powertrain("EV Wind", None) == "electric"
+    assert detect_powertrain("Niro EV", None) == "electric"
+
 def test_powertrain_gas():
     assert detect_powertrain("SE R-Line Black", "Tiguan") == "gas"
 
@@ -68,9 +78,9 @@ def test_score_overpriced():
     assert score_listing(36_000, 30_000) <= 10
 
 def test_score_slightly_below():
-    # 10% below market with steepness=25 → sigmoid(0.1*25) ≈ 92
+    # 10% below market with steepness=11 → sigmoid(0.1*11) ≈ 75
     score = score_listing(27_000, 30_000)
-    assert 88 <= score <= 95
+    assert 72 <= score <= 78
 
 def test_score_none_when_no_ml_price():
     assert score_listing(30_000, None) is None

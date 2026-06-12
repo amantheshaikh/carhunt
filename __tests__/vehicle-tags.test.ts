@@ -25,6 +25,16 @@ describe("getDrivetrain", () => {
   it("checks model string too", () => {
     expect(getDrivetrain(null, "Tiguan 4Motion")).toBe("AWD");
   });
+  it("prioritizes database resolved drivetrain", () => {
+    expect(getDrivetrain("SE R-Line Black", "Tiguan", "awd")).toBe("AWD");
+    expect(getDrivetrain("SEL AWD", null, "fwd")).toBe("FWD");
+  });
+  it("detects specialized keywords client-side", () => {
+    expect(getDrivetrain("xDrive30i", null)).toBe("AWD");
+    expect(getDrivetrain("sDrive28i", null)).toBe("FWD");
+    expect(getDrivetrain("quattro", null)).toBe("AWD");
+    expect(getDrivetrain("4MATIC", null)).toBe("AWD");
+  });
 });
 
 describe("getPowertrain", () => {
@@ -43,6 +53,15 @@ describe("getPowertrain", () => {
   it("handles null inputs", () => {
     expect(getPowertrain(null, null)).toBeNull();
   });
+  it("detects PHEV from Volvo Recharge and T8", () => {
+    expect(getPowertrain("Recharge T8 Plus Dark Theme eAWD", "XC60 Recharge")).toBe("PHEV");
+  });
+  it("detects Hybrid from Lexus 350h/400h/500h", () => {
+    expect(getPowertrain("350h Premium", "NX 350h")).toBe("Hybrid");
+  });
+  it("detects Electric from EV/IONIQ", () => {
+    expect(getPowertrain("IONIQ 5 SEL", null)).toBe("Electric");
+  });
 });
 
 describe("getDrivetrainTag", () => {
@@ -55,6 +74,9 @@ describe("getDrivetrainTag", () => {
   it("returns empty string when drivetrain unknown", () => {
     expect(getDrivetrainTag("SE R-Line Black", null)).toBe("");
   });
+  it("uses database resolved drivetrain", () => {
+    expect(getDrivetrainTag("SE R-Line Black", null, "awd")).toBe("awd");
+  });
 });
 
 describe("getPowertrainTag", () => {
@@ -66,5 +88,9 @@ describe("getPowertrainTag", () => {
   });
   it("returns 'gas' for non-hybrids", () => {
     expect(getPowertrainTag("SE R-Line Black", "Tiguan")).toBe("gas");
+  });
+  it("returns 'hybrid' for Volvo Recharge and Lexus 350h", () => {
+    expect(getPowertrainTag("Recharge T8", null)).toBe("hybrid");
+    expect(getPowertrainTag("350h Premium", null)).toBe("hybrid");
   });
 });

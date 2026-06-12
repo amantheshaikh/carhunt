@@ -14,6 +14,7 @@ API-based strategies (configured via scraper_config JSONB column):
   carscommerce  — CDK-hosted sites (e.g. Potamkin Hyundai)
   ridemotive    — RideMotive / Algolia (e.g. Jim Ellis Kia)
   secureoffersites — Vue.js SSR (e.g. Hyundai of Cumming)
+  dealeron_cosmos  — DealerOn spaCosmos SPA (e.g. Hyundai of Kennesaw, Ed Voyles Kia)
 """
 import asyncio
 import concurrent.futures
@@ -48,6 +49,84 @@ def _is_overfuel_url(url: str) -> bool:
     return "api.overfuel.com" in url
 
 
+def _build_dealer_com_url(inventory_url: str, makes: list[str] | None, min_year: int, max_year: int | None) -> str:
+    if "index.htm" not in inventory_url:
+        return inventory_url
+    # Require Dealer.com (CDK) inventory path segments to avoid injecting params into
+    # unrelated CMSes (e.g. DealerInspire) that also happen to have index.htm in their URLs
+    _DC_PATHS = ("/used-inventory/", "/new-inventory/", "/certified-inventory/", "/pre-owned/")
+    if not any(p in inventory_url for p in _DC_PATHS):
+        return inventory_url
+
+    from urllib.parse import urlparse, parse_qs, urlencode
+    from datetime import datetime
+    parsed = urlparse(inventory_url)
+    params = parse_qs(parsed.query)
+    
+    # Clean up parameters we are going to supply ourselves
+    for key in ["make", "model", "year", "start", "pageNum"]:
+        params.pop(key, None)
+        
+    # Build our parameters — filter by make only (model names in cars.json often don't match
+    # Dealer.com model names, e.g. "NX 350h" vs "NX", causing false-zero results)
+    if makes:
+        params["make"] = list(makes)
+
+    # Year filter — Dealer.com expects individual year values, not a range string
+    if min_year:
+        max_yr = max_year or datetime.now().year + 2
+        params["year"] = [str(y) for y in range(min_year, max_yr + 1)]
+        
+    # Reconstruct URL
+    query_str = urlencode(params, doseq=True)
+    sep = "?" if query_str else ""
+    return f"{parsed.scheme}://{parsed.netloc}{parsed.path}{sep}{query_str}"
+
+
+def _build_dealeron_url(inventory_url: str, makes: list[str] | None, min_year: int, max_year: int | None) -> str:
+    is_dealeron = any(p in inventory_url.lower() for p in ["searchused.aspx", "searchnew.aspx", "search.aspx", "inventory.aspx"])
+    if not is_dealeron:
+        return inventory_url
+    if "amazingluxurycars.com" in inventory_url:
+        return inventory_url
+
+    from urllib.parse import urlparse, parse_qs, urlencode
+    from datetime import datetime
+    parsed = urlparse(inventory_url)
+    params = parse_qs(parsed.query)
+    
+    # Clean up parameters we are going to supply ourselves
+    for key in ["Make", "MakeModelTrim", "ModelAndTrim", "yearrange", "year", "pageNum", "start", "q"]:
+        params.pop(key, None)
+        
+    # Build ModelAndTrim
+    from tools.base_trims import _VEHICLES
+    models = []
+    for v in _VEHICLES:
+        model = v["model"]
+        models.append(model)
+        if " Hybrid" in model:
+            models.append(model.replace(" Hybrid", ""))
+        if " Recharge" in model:
+            models.append(model.replace(" Recharge", ""))
+        if " 350h" in model:
+            models.append(model.replace(" 350h", ""))
+    models = sorted(list(set(models)))
+    params["ModelAndTrim"] = ["!".join(models)]
+    
+    # Build yearrange
+    if min_year:
+        max_yr = max_year or datetime.now().year + 2
+        params["yearrange"] = [f"{min_year}-{max_yr}"]
+        
+    # Reconstruct URL
+    query_str = urlencode(params, doseq=True)
+    query_str = query_str.replace("%21", "!")
+    sep = "?" if query_str else ""
+    return f"{parsed.scheme}://{parsed.netloc}{parsed.path}{sep}{query_str}"
+
+
+
 # ---------------------------------------------------------------------------
 # Cobalt/CDK Group dealer sites (Lexus, Toyota, many others)
 # These sites load inventory via POST /api/widget/ws-inv-data/getInventory.
@@ -60,7 +139,6 @@ async def _scrape_cobalt_async(inventory_url: str, brand: str,
     inventory: list[dict] = []
     seen_ids: set[str] = set()
     base_url = "/".join(inventory_url.split("/")[:3])
-    _target_makes = {m.lower() for m in makes} if makes else set()
 
     def _extract_cobalt_price(pricing: dict) -> int | None:
         """Extract numeric price from Cobalt pricing dict."""
@@ -72,12 +150,12 @@ async def _scrape_cobalt_async(inventory_url: str, brand: str,
                 raw = dp.get("value", "")
                 if not isinstance(raw, str):
                     continue  # skip nested dicts — str(dict) would produce garbage digits
-                return _int(re.sub(r"[^0-9]", "", raw)) or None
+                return _int(raw) or None
         # Fall back to retailPrice string
         raw = pricing.get("retailPrice") or pricing.get("salePrice") or ""
         if not isinstance(raw, str):
             return None
-        return _int(re.sub(r"[^0-9]", "", raw)) or None
+        return _int(raw) or None
 
     def _extract_cobalt_mileage(item: dict) -> int | None:
         """Extract mileage from Cobalt item — may be in attributes list or trackingAttributes."""
@@ -98,12 +176,6 @@ async def _scrape_cobalt_async(inventory_url: str, brand: str,
                 data = await resp.json()
                 for item in data.get("inventory", []):
                     if not isinstance(item, dict):
-                        continue
-                    # Server-side pre-filter: skip non-target makes and years before building listing
-                    if _target_makes and (item.get("make") or "").lower() not in _target_makes:
-                        continue
-                    item_year = int(item.get("year") or 0)
-                    if item_year and (item_year < min_year or (max_year and item_year > max_year)):
                         continue
                     vin   = item.get("vin") or None
                     uuid  = item.get("uuid") or item.get("stockNumber") or ""
@@ -143,6 +215,9 @@ async def _scrape_cobalt_async(inventory_url: str, brand: str,
         page = await ctx.new_page()
         # Register BEFORE goto so we don't miss responses on fast networks
         page.on("response", _on_response)
+        # Navigate to bare URL — URL-level make/year params break the Dealer.com SPA's
+        # getInventory POST body, causing it to return 0 results. Post-filtering in _add_used
+        # covers the same ground without touching the SPA's API call.
         try:
             await page.goto(inventory_url, wait_until="domcontentloaded", timeout=30_000)
             await page.wait_for_timeout(6_000)
@@ -171,11 +246,152 @@ async def _scrape_cobalt_async(inventory_url: str, brand: str,
     return inventory
 
 
+# ---------------------------------------------------------------------------
+# DealerOn spaCosmos SPA
+# The SPA calls /api/vhcliaa/vehicle-pages/cosmos/srp/vehicles/{dealer_id}/{page_id}.
+# We intercept the first request to discover those IDs, then paginate via httpx.
+# ---------------------------------------------------------------------------
+
+async def _scrape_dealeron_cosmos_async(inventory_url: str, brand: str,
+                                         makes: list[str] | None = None,
+                                         min_year: int = 0,
+                                         max_year: int | None = None,
+                                         cosmos_path: str | None = None) -> list[dict]:
+    from urllib.parse import urlparse, urlencode
+    from datetime import datetime
+    import httpx
+
+    base_url = "/".join(inventory_url.split("/")[:3])
+
+    # If dealer_id + page_id are pre-configured, build cosmos_path directly
+    # and skip the browser entirely — faster and avoids SPA-detection issues.
+    if not cosmos_path:
+        async with Stealth().use_async(async_playwright()) as p:
+            browser, ctx = await _stealth_browser(p)
+            page = await ctx.new_page()
+
+            async def _on_response(resp):
+                nonlocal cosmos_path
+                if "/api/vhcliaa/vehicle-pages/cosmos/srp/" in resp.url:
+                    parsed = urlparse(resp.url)
+                    path = parsed.path.replace("/srp/filters/", "/srp/vehicles/")
+                    cosmos_path = f"{parsed.scheme}://{parsed.netloc}{path}"
+
+            page.on("response", _on_response)
+            try:
+                await page.goto(inventory_url, wait_until="domcontentloaded", timeout=30_000)
+                for _ in range(40):
+                    if cosmos_path:
+                        break
+                    await page.wait_for_timeout(500)
+            finally:
+                await browser.close()
+
+    if not cosmos_path:
+        return []
+
+    # Strip any embedded query params — we supply our own via urlencode(params)
+    cosmos_path = cosmos_path.split("?")[0]
+
+    from tools.base_trims import _VEHICLES as _VEH
+    max_yr = max_year or datetime.now().year + 2
+    host = urlparse(inventory_url).netloc
+
+    # Build make/model filter (same ! separator as DealerOn legacy)
+    models: list[str] = []
+    for v in _VEH:
+        if not makes or v["make"].lower() in [m.lower() for m in makes]:
+            m = v["model"]
+            models.append(m)
+            for suffix in (" Hybrid", " Recharge", " 350h", " PHEV"):
+                if m.endswith(suffix):
+                    models.append(m[: -len(suffix)])
+    models = sorted(set(models))
+
+    # Build params as list of tuples — Make must repeat per make (! separator not supported)
+    base_params: list[tuple] = [
+        ("host", host),
+        ("baseFilter", "dHlwZT0ndSc="),  # base64("type='u'") — used vehicles only
+        ("displayCardsShown", 24),
+    ]
+    if min_year:
+        base_params.append(("yearrange", f"{min_year}-{max_yr}"))
+    for m in (makes or []):
+        base_params.append(("Make", m))
+    if models:
+        base_params.append(("ModelAndTrim", "!".join(models)))
+
+    all_cards: list[dict] = []
+    async with httpx.AsyncClient(timeout=15, headers={"User-Agent": "Mozilla/5.0"}) as client:
+        page_num = 1
+        while True:
+            params = base_params + [("pageNumber", page_num)]
+            resp = await client.get(f"{cosmos_path}?{urlencode(params)}")
+            data = resp.json()
+            cards = [
+                item["VehicleCard"]
+                for item in data.get("DisplayCards", [])
+                if not item.get("IsAdCard") and item.get("VehicleCard")
+            ]
+            if not cards:
+                break
+            all_cards.extend(cards)
+            paging = data.get("Paging", {}).get("PaginationDataModel", {})
+            if paging and page_num >= paging.get("TotalPages", 1):
+                break
+            page_num += 1
+
+    return [_normalize_cosmos_vehicle(c, brand, base_url) for c in all_cards]
+
+
+def _normalize_cosmos_vehicle(card: dict, brand: str, base_url: str) -> dict:
+    mi_m = re.search(r"[\d,]+", card.get("Mileage") or "")
+    mileage = int(mi_m.group().replace(",", "")) if mi_m else None
+
+    price_raw = card.get("TaggingPrice") or card.get("VehicleMsrp") or 0
+    try:
+        price = int(float(str(price_raw).replace(",", ""))) or None
+    except (ValueError, TypeError):
+        price = None
+
+    href = card.get("VehicleDetailUrl") or ""
+    if href and not href.startswith("http"):
+        href = base_url.rstrip("/") + "/" + href.lstrip("/")
+
+    cond_raw = (card.get("VehicleCondition") or "").lower()
+    if card.get("VehicleCpo") or "certified" in cond_raw:
+        condition = "cpo"
+    elif "new" in cond_raw:
+        condition = "new"
+    else:
+        condition = "used"
+
+    vin = card.get("VehicleVin") or None
+    stock = card.get("VehicleStockNumber") or None
+    return _make_listing(
+        brand, vin or stock or href[-20:],
+        vin=vin, make=(card.get("VehicleMake") or "").title(),
+        model=card.get("VehicleModel") or "",
+        trim=card.get("VehicleTrim") or None,
+        year=card.get("VehicleYear"),
+        body_type=(card.get("VehicleBodyType") or "").lower() or None,
+        mileage=mileage, price=price,
+        listing_url=href or base_url,
+        photos_url=[card["VehiclePhotoSrc"]] if card.get("VehiclePhotoSrc") else [],
+        dealer_name=base_url.replace("https://www.", "").replace("http://www.", ""),
+        condition=condition, raw=card,
+    )
+
+
 def _scrape_overfuel(api_url: str, brand: str, website_url: str = _OVERFUEL_BASE_URL) -> list[dict]:
-    """Fetch all pages from an Overfuel API search URL (max 18/page, paginated by offset)."""
+    """Fetch all pages from an Overfuel API search URL (max 100/page, paginated by offset)."""
     listings: list[dict] = []
     seen_vins: set[str] = set()
     offset = 0
+
+    if "limit=" not in api_url:
+        sep = "&" if "?" in api_url else "?"
+        api_url = f"{api_url}{sep}limit=100"
 
     while True:
         sep = "&" if "?" in api_url else "?"
@@ -185,7 +401,7 @@ def _scrape_overfuel(api_url: str, brand: str, website_url: str = _OVERFUEL_BASE
             r.raise_for_status()
             data = r.json()
         except Exception as e:
-            print(f"    [overfuel] error at offset={offset}: {e}")
+            print(f"    [overfuel] error at offset={offset}: {e}", flush=True)
             break
 
         results = data.get("results", [])
@@ -299,10 +515,9 @@ def _scrape_dealerinspire_algolia(app_id: str, api_key: str, index: str, brand: 
     algolia_filters = "NOT type:New"
     if makes:
         algolia_filters += " AND (" + " OR ".join(f'make:"{m}"' for m in makes) + ")"
-    if min_year:
-        algolia_filters += f" AND year >= {min_year}"
-    if max_year:
-        algolia_filters += f" AND year <= {max_year}"
+    # Year range is intentionally NOT filtered at Algolia level — some indexes store year as a
+    # string attribute, so numeric range filters (year >= 2025) return 0 results. Year filtering
+    # is handled by _add_used post-scrape instead.
 
     while True:
         try:
@@ -318,7 +533,7 @@ def _scrape_dealerinspire_algolia(app_id: str, api_key: str, index: str, brand: 
             )
             data = r.json()
         except Exception as e:
-            print(f"    [dealerinspire_algolia] page {page} error: {e}")
+            print(f"    [dealerinspire_algolia] page {page} error: {e}", flush=True)
             break
 
         hits = data.get("hits", [])
@@ -555,9 +770,9 @@ async def _scrape_secureoffersites_async(inventory_url: str, brand: str) -> list
         });
     }"""
 
-    async with async_playwright() as p:
-        browser = await p.chromium.launch(headless=True)
-        page = await browser.new_page()
+    async with Stealth().use_async(async_playwright()) as p:
+        browser, ctx = await _stealth_browser(p)
+        page = await ctx.new_page()
         try:
             await page.goto(f"{clean}{sep}page=1", wait_until="domcontentloaded", timeout=30_000)
             await page.wait_for_timeout(4_000)
@@ -647,9 +862,14 @@ async def _collect_dv_page(page) -> list[dict]:
 
 
 async def _scrape_dealer_inventory_async(inventory_url: str, brand: str,
-                                         extra_wait_ms: int = 0) -> list[dict]:
+                                         extra_wait_ms: int = 0,
+                                         makes: list[str] | None = None,
+                                         min_year: int = 0,
+                                         max_year: int | None = None) -> list[dict]:
+    inventory_url = _build_dealer_com_url(inventory_url, makes, min_year, max_year)
+    inventory_url = _build_dealeron_url(inventory_url, makes, min_year, max_year)
     base_url = "/".join(inventory_url.split("/")[:3])
-    clean_url = re.sub(r"[?&]pageNum=\d+", "", inventory_url).rstrip("?&")
+    clean_url = re.sub(r"[?&](pageNum|start)=\d+", "", inventory_url).rstrip("?&")
 
     async with Stealth().use_async(async_playwright()) as p:
         browser, ctx = await _stealth_browser(p)
@@ -775,45 +995,69 @@ async def _scrape_dealer_inventory_async(inventory_url: str, brand: str,
                 "() => document.querySelectorAll('li.vehicle-card[data-uuid]').length"
             )
             if ddcm_count > 0:
-                await page.evaluate("""async () => {
-                    for (const card of document.querySelectorAll('li.vehicle-card[data-uuid]')) {
-                        card.scrollIntoView();
-                        await new Promise(r => setTimeout(r, 350));
-                    }
-                }""")
-                await page.wait_for_timeout(2000)
+                all_ddcm = []
+                seen_uuids = set()
+                # Scrape up to 4 pages (72 listings)
+                for pagenum in range(1, 5):
+                    offset = (pagenum - 1) * 18
+                    if pagenum > 1:
+                        sep = "&" if "?" in clean_url else "?"
+                        await page.goto(
+                            f"{clean_url}{sep}start={offset}",
+                            wait_until="domcontentloaded",
+                            timeout=20_000,
+                        )
+                        await page.wait_for_timeout(3_000 + extra_wait_ms)
+                    
+                    await page.evaluate("""async () => {
+                        for (const card of document.querySelectorAll('li.vehicle-card[data-uuid]')) {
+                            card.scrollIntoView();
+                            await new Promise(r => setTimeout(r, 150));
+                        }
+                    }""")
+                    await page.wait_for_timeout(1000)
 
-                ddcm_items = await page.evaluate("""() => {
-                    return Array.from(document.querySelectorAll('li.vehicle-card[data-uuid]')).map(card => {
-                        try {
-                            const text = card.innerText || '';
-                            const html = card.innerHTML || '';
-                            const uuid = card.getAttribute('data-uuid') || '';
-                            const linkEl = card.querySelector('a[href]');
-                            const href = linkEl ? (linkEl.href || '') : '';
-                            const vinM = text.match(/VIN[:\\s]+([A-HJ-NPR-Z0-9]{17})/i)
-                                      || html.match(/data-vin="([A-HJ-NPR-Z0-9]{17})"/i);
-                            const vinHtmlRaw = html.match(/\\b([A-HJ-NPR-Z0-9]{17})\\b/);
-                            const vin = (vinM ? vinM[1] : (vinHtmlRaw ? vinHtmlRaw[1] : '')).trim();
-                            const titleEl = card.querySelector('h2,h3,[class*=vehicle-title],[class*=vehicle-name]');
-                            const title = ((titleEl ? titleEl.innerText : '') || text.split('\\n').find(l => /20\\d{2}/.test(l)) || '').trim();
-                            const yearM = title.match(/(20\\d{2})/);
-                            const year = yearM ? parseInt(yearM[1]) : null;
-                            const priceM = text.match(/(?:Vehicle Price|Selling Price|Internet Price|Our Price|Sale Price|ePrice|Dealer Price|Today[''`]?s Price)\\s*\\$([\\d,]+)/i)
-                                        || text.match(/MSRP\\s*\\$([\\d,]+)/i)
-                                        || text.match(/Retail Price\\s*\\$([\\d,]+)/i)
-                                        || text.match(/\\$([\\d,]+)/);
-                            const price = priceM ? parseInt(priceM[1].replace(/,/g,'')) : null;
-                            const miM = text.match(/([\\d,]+)\\s*miles?\\b/i);
-                            const mileage = miM ? parseInt(miM[1].replace(/,/g,'')) : null;
-                            const isNew = /\\/new\\//i.test(href) || /^[\\s\\S]{0,150}\\bNew\\b/.test(text);
-                            const condition = isNew ? 'new' : 'used';
-                            return {uuid, vin: vin || null, title, year, price, mileage, condition, href};
-                        } catch(e) { return null; }
-                    }).filter(Boolean);
-                }""")
-                if ddcm_items:
-                    return [_normalize_ddcm_vehicle(item, brand, base_url) for item in ddcm_items]
+                    page_items = await page.evaluate("""() => {
+                        return Array.from(document.querySelectorAll('li.vehicle-card[data-uuid]')).map(card => {
+                            try {
+                                const text = card.innerText || '';
+                                const html = card.innerHTML || '';
+                                const uuid = card.getAttribute('data-uuid') || '';
+                                const linkEl = card.querySelector('a[href]');
+                                const href = linkEl ? (linkEl.href || '') : '';
+                                const vinM = text.match(/VIN[:\\s]+([A-HJ-NPR-Z0-9]{17})/i)
+                                          || html.match(/data-vin="([A-HJ-NPR-Z0-9]{17})"/i);
+                                const vinHtmlRaw = html.match(/\\b([A-HJ-NPR-Z0-9]{17})\\b/);
+                                const vin = (vinM ? vinM[1] : (vinHtmlRaw ? vinHtmlRaw[1] : '')).trim();
+                                const titleEl = card.querySelector('h2,h3,[class*=vehicle-title],[class*=vehicle-name]');
+                                const title = ((titleEl ? titleEl.innerText : '') || text.split('\\n').find(l => /20\\d{2}/.test(l)) || '').trim();
+                                const yearM = title.match(/(20\\d{2})/);
+                                const year = yearM ? parseInt(yearM[1]) : null;
+                                const priceM = text.match(/(?:Vehicle Price|Selling Price|Internet Price|Our Price|Sale Price|ePrice|Dealer Price|Today[''`]?s Price)\\s*\\$([\\d,]+)/i)
+                                            || text.match(/MSRP\\s*\\$([\\d,]+)/i)
+                                            || text.match(/Retail Price\\s*\\$([\\d,]+)/i)
+                                            || text.match(/\\$([\\d,]+)/);
+                                const price = priceM ? parseInt(priceM[1].replace(/,/g,'')) : null;
+                                const miM = text.match(/([\\d,]+)\\s*miles?\\b/i);
+                                const mileage = miM ? parseInt(miM[1].replace(/,/g,'')) : null;
+                                const isNew = /\\/new\\//i.test(href) || /^[\\s\\S]{0,150}\\bNew\\b/.test(text);
+                                const condition = isNew ? 'new' : 'used';
+                                return {uuid, vin: vin || null, title, year, price, mileage, condition, href};
+                            } catch(e) { return null; }
+                        }).filter(Boolean);
+                    }""")
+                    if not page_items:
+                        break
+                    new_items = [i for i in page_items if i["uuid"] not in seen_uuids]
+                    if not new_items:
+                        break
+                    all_ddcm.extend(new_items)
+                    seen_uuids.update(i["uuid"] for i in new_items)
+                    if len(page_items) < 10:
+                        break
+
+                if all_ddcm:
+                    return [_normalize_ddcm_vehicle(item, brand, base_url) for item in all_ddcm]
 
             # Strategy 4: Algolia InstantSearch li.ais-Hits-item (DOM text parsing)
             ais_count = await page.evaluate(
@@ -899,7 +1143,7 @@ async def _scrape_dealer_inventory_async(inventory_url: str, brand: str,
                         if m:
                             mileage = int(m.group(1).replace(",", ""))
                     except Exception as _e:
-                        print(f"    [detail page] {href[-50:]}: {type(_e).__name__}: {_e}")
+                        print(f"    [detail page] {href[-50:]}: {type(_e).__name__}: {_e}", flush=True)
                     finally:
                         if detail_pg:
                             try:
@@ -1251,7 +1495,8 @@ SITE_TIMEOUT_SECONDS = 90
 
 
 def scrape_dealer(site: dict, makes: list[str] | None = None,
-                  min_year: int = 0, max_year: int | None = None) -> list[dict]:
+                  min_year: int = 0, max_year: int | None = None,
+                  update_cooldown: bool = True) -> list[dict]:
     """Scrape one dealer's used + CPO inventory. Failures don't block other dealers."""
     print(f"  [dealer/{site['brand']}] {site['name']}...", flush=True)
     listings: list[dict] = []
@@ -1263,7 +1508,38 @@ def scrape_dealer(site: dict, makes: list[str] | None = None,
             # Pre-filter: discard non-target makes and out-of-range years before saving
             if _target_makes and (l.get("make") or "").lower() not in _target_makes:
                 continue
+            
+            # Coerce year safely
             year = l.get("year")
+            if year is not None:
+                try:
+                    if isinstance(year, str):
+                        year = re.sub(r"[^0-9]", "", year)
+                    year = int(year)
+                    l["year"] = year
+                except (ValueError, TypeError):
+                    year = None
+                    l["year"] = None
+
+            # Coerce mileage safely
+            mileage = l.get("mileage")
+            if mileage is not None:
+                try:
+                    if isinstance(mileage, str):
+                        mileage = re.sub(r"[^0-9]", "", mileage)
+                    mileage = int(mileage)
+                    l["mileage"] = mileage
+                except (ValueError, TypeError):
+                    l["mileage"] = None
+
+            # Coerce price safely — use _int (handles decimals/commas) rather than
+            # stripping all non-digits, which would inflate "29999.00" to 2999900
+            price = l.get("price")
+            if price is not None:
+                coerced = _int(price)
+                l["price"] = coerced
+                price = coerced
+
             if year and (year < min_year or (max_year and year > max_year)):
                 continue
             vin = l.get("vin")
@@ -1302,7 +1578,8 @@ def scrape_dealer(site: dict, makes: list[str] | None = None,
                 ))
             elif cfg.get("type") == "cobalt":
                 _add_used(_run_with_timeout(
-                    _scrape_cobalt_async(site["inventory_url"], site["brand"], makes, min_year, max_year)
+                    _scrape_cobalt_async(site["inventory_url"], site["brand"], makes, min_year, max_year),
+                    timeout=150,
                 ))
             elif cfg.get("type") == "dealerinspire_algolia":
                 _add_used(_scrape_dealerinspire_algolia(
@@ -1327,32 +1604,41 @@ def scrape_dealer(site: dict, makes: list[str] | None = None,
                 _add_used(_run_with_timeout(
                     _scrape_secureoffersites_async(site["inventory_url"], site["brand"])
                 ))
+            elif cfg.get("type") == "dealeron_cosmos":
+                _add_used(_run_with_timeout(
+                    _scrape_dealeron_cosmos_async(site["inventory_url"], site["brand"],
+                                                   makes=makes, min_year=min_year, max_year=max_year,
+                                                   cosmos_path=cfg.get("cosmos_path"))
+                ))
             else:
                 _add_used(_run_with_timeout(
                     _scrape_dealer_inventory_async(site["inventory_url"], site["brand"],
-                                                   extra_wait_ms=cfg.get("extra_wait_ms", 0))
+                                                   extra_wait_ms=cfg.get("extra_wait_ms", 0),
+                                                   makes=makes, min_year=min_year, max_year=max_year)
                 ))
         except concurrent.futures.TimeoutError:
             print(f"    timed out after {SITE_TIMEOUT_SECONDS}s — skipping", flush=True)
         except Exception as e:
-            print(f"    used inventory error: {e}")
+            print(f"    used inventory error: {e}", flush=True)
 
         # CPO: only probe for Playwright-based sites — API scrapers already include CPO
         if not cfg.get("type"):
             for cpo_url in _cpo_urls_for(site["inventory_url"]):
                 try:
                     cpo_listings = _run_with_timeout(
-                        _scrape_dealer_inventory_async(cpo_url, site["brand"])
+                        _scrape_dealer_inventory_async(cpo_url, site["brand"],
+                                                       makes=makes, min_year=min_year, max_year=max_year)
                     )
                     if cpo_listings:
-                        print(f"    CPO: {len(cpo_listings)} listings at {cpo_url.replace(site['inventory_url'].rsplit('/',2)[0],'')}")
+                        print(f"    CPO: {len(cpo_listings)} listings at {cpo_url.replace(site['inventory_url'].rsplit('/',2)[0],'')}", flush=True)
                         _add_used(cpo_listings)
                         break
                 except (concurrent.futures.TimeoutError, Exception):
                     pass
 
-    execute("UPDATE dealer_sites SET last_scraped_at = now() WHERE id = %s", (site["id"],))
-    print(f"    {len(listings)} listings found")
+    if update_cooldown:
+        execute("UPDATE dealer_sites SET last_scraped_at = now() WHERE id = %s", (site["id"],))
+    print(f"    {len(listings)} listings found", flush=True)
     return listings
 
 
@@ -1361,14 +1647,15 @@ DEALER_COOLDOWN_HOURS = 6
 
 def scrape_all_dealers(makes: list[str] | None = None,
                        min_year: int = 0, max_year: int | None = None,
-                       force: bool = False) -> list[dict]:
-    """Scrape active dealer sites. force=True bypasses the 6h cooldown (used by training_collector)."""
+                       force: bool = False, update_cooldown: bool = True) -> list[dict]:
+    """Scrape active dealer sites. force=True bypasses the 6h cooldown (used by training_collector).
+    update_cooldown=False skips stamping last_scraped_at so the next sourcing refresh isn't blocked."""
     if force:
         sites = fetch_all(
             """SELECT id, brand, name, inventory_url, last_scraped_at, scraper_config, website_url
                FROM dealer_sites WHERE is_active = true AND inventory_url IS NOT NULL"""
         )
-        print(f"  [dealer] {len(sites)} site(s) (force mode — ignoring cooldown)")
+        print(f"  [dealer] {len(sites)} site(s) (force mode — ignoring cooldown)", flush=True)
     else:
         sites = fetch_all(
             """SELECT id, brand, name, inventory_url, last_scraped_at, scraper_config, website_url
@@ -1378,13 +1665,13 @@ def scrape_all_dealers(makes: list[str] | None = None,
             (DEALER_COOLDOWN_HOURS,),
         )
         if not sites:
-            print(f"  [dealer] All sites scraped within last {DEALER_COOLDOWN_HOURS}h — skipping")
+            print(f"  [dealer] All sites scraped within last {DEALER_COOLDOWN_HOURS}h — skipping", flush=True)
             return []
-        print(f"  [dealer] {len(sites)} site(s) due for scrape (cooldown: {DEALER_COOLDOWN_HOURS}h)")
+        print(f"  [dealer] {len(sites)} site(s) due for scrape (cooldown: {DEALER_COOLDOWN_HOURS}h)", flush=True)
 
     all_listings: list[dict] = []
     with concurrent.futures.ThreadPoolExecutor(max_workers=5) as pool:
-        futures = {pool.submit(scrape_dealer, site, makes, min_year, max_year): site for site in sites}
+        futures = {pool.submit(scrape_dealer, site, makes, min_year, max_year, update_cooldown): site for site in sites}
         for fut in concurrent.futures.as_completed(futures):
             site = futures[fut]
             try:

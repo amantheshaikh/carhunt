@@ -42,9 +42,12 @@ export default function QueryChat() {
   const ask = async (question: string) => {
     if (!question.trim() || loading) return;
     setInput("");
-    setMessages((prev) => [
-      ...prev,
-      { role: "user", content: question },
+    const newMessages: Message[] = [
+      ...messages,
+      { role: "user", content: question }
+    ];
+    setMessages([
+      ...newMessages,
       { role: "assistant", content: "", loading: true },
     ]);
     setLoading(true);
@@ -53,7 +56,7 @@ export default function QueryChat() {
       const res = await fetch("/api/query", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ question }),
+        body: JSON.stringify({ question, history: newMessages }),
       });
       const data = await res.json();
       setMessages((prev) => [

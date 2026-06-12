@@ -17,7 +17,6 @@ interface Filters {
   models: string[];          // empty = all
   years: number[];           // empty = all
   drivetrain: "" | "awd" | "fwd";
-  powertrain: "" | "hybrid" | "gas";
   maxPrice: number | "";
   maxMileage: number | "";
   minDealScore: number | "";  // minimum value_score threshold mapped from deal category
@@ -33,7 +32,7 @@ const SORT_OPTIONS: { value: SortKey; label: string }[] = [
 ];
 
 const DEFAULT_FILTERS: Filters = {
-  models: [], years: [], drivetrain: "", powertrain: "", maxPrice: "", maxMileage: "", minDealScore: "",
+  models: [], years: [], drivetrain: "", maxPrice: "", maxMileage: "", minDealScore: "",
 };
 
 
@@ -41,8 +40,7 @@ function applyFiltersAndSort(listings: Listing[], filters: Filters, sort: SortKe
   let out = listings.filter((l) => {
     if (filters.models.length && !filters.models.includes(l.model)) return false;
     if (filters.years.length && !filters.years.includes(l.year)) return false;
-    if (filters.drivetrain && getDrivetrainTag(l.trim, l.model) !== filters.drivetrain) return false;
-    if (filters.powertrain && getPowertrainTag(l.trim, l.model) !== filters.powertrain) return false;
+    if (filters.drivetrain && getDrivetrainTag(l.trim, l.model, l.drivetrain) !== filters.drivetrain) return false;
     if (filters.maxPrice !== "" && l.price > filters.maxPrice) return false;
     if (filters.maxMileage !== "" && (l.mileage ?? 0) > filters.maxMileage) return false;
     if (filters.minDealScore !== "" && (l.value_score ?? 0) < filters.minDealScore) return false;
@@ -56,8 +54,8 @@ function applyFiltersAndSort(listings: Listing[], filters: Filters, sort: SortKe
       case "mileage_asc":  return (a.mileage ?? 0) - (b.mileage ?? 0);
       case "newest":       return new Date(b.first_seen_at).getTime() - new Date(a.first_seen_at).getTime();
       case "below_market": {
-        const discountA = a.market_median_price ? (a.market_median_price - a.price) / a.market_median_price : -1;
-        const discountB = b.market_median_price ? (b.market_median_price - b.price) / b.market_median_price : -1;
+        const discountA = a.fair_price ? (a.fair_price - a.price) / a.fair_price : -1;
+        const discountB = b.fair_price ? (b.fair_price - b.price) / b.fair_price : -1;
         return discountB - discountA;
       }
       default: return (b.value_score ?? 0) - (a.value_score ?? 0);
@@ -107,7 +105,6 @@ function FilterBar({
     if (filters.models.length) n++;
     if (filters.years.length) n++;
     if (filters.drivetrain) n++;
-    if (filters.powertrain) n++;
     if (filters.maxPrice !== "") n++;
     if (filters.maxMileage !== "") n++;
     if (filters.minDealScore !== "") n++;
@@ -206,17 +203,6 @@ function FilterBar({
             </div>
 
             <div>
-              <p className="text-xs text-zinc-500 mb-1.5 font-medium">Powertrain</p>
-              <div className="flex gap-1.5">
-                {[["", "All"], ["hybrid", "Hybrid"], ["gas", "Gas only"]].map(([v, label]) => (
-                  <FilterChip key={v} active={filters.powertrain === v} onClick={() => onFilters({ ...filters, powertrain: v as Filters["powertrain"] })}>
-                    {label}
-                  </FilterChip>
-                ))}
-              </div>
-            </div>
-
-            <div>
               <p className="text-xs text-zinc-500 mb-1.5 font-medium">Deal quality</p>
               <div className="flex gap-1.5">
                 {([["", "Any"], [45, "Fair Price+"], [58, "Good Deal+"], [72, "Great Deal+"], [88, "Exceptional"]] as [number|"", string][]).map(([v, label]) => (
@@ -260,8 +246,6 @@ function FilterBar({
 
 const TABS: { key: string; label: string }[] = [
   { key: "active", label: "Active" },
-  { key: "contacted", label: "Contacted" },
-  { key: "purchased", label: "Purchased" },
   { key: "dismissed", label: "Dismissed" },
   { key: "training", label: "Training Data" },
 ];
@@ -349,6 +333,10 @@ function JobBanner({ job, onDismiss }: { job: JobStatus | null; onDismiss: () =>
   const isRunning = !!job && job.status === "running";
   const justFinished = !!job && job.status === "complete";
   const isError = !!job && job.status === "error";
+  const [showLog, setShowLog] = useState(true);
+  const [logLines, setLogLines] = useState<string[]>([]);
+  const logRef = useRef<HTMLDivElement>(null);
+  const esRef = useRef<EventSource | null>(null);
 
   useEffect(() => {
     if (justFinished || isError) {
@@ -356,6 +344,34 @@ function JobBanner({ job, onDismiss }: { job: JobStatus | null; onDismiss: () =>
       return () => clearTimeout(t);
     }
   }, [justFinished, isError, onDismiss]);
+
+  // Open SSE stream when job starts, close when it stops.
+  useEffect(() => {
+    if (!isRunning) {
+      esRef.current?.close();
+      esRef.current = null;
+      return;
+    }
+    if (esRef.current) return;
+    setLogLines([]);
+    const es = new EventSource("/api/logs/stream");
+    esRef.current = es;
+    es.onmessage = (e) => {
+      const line = JSON.parse(e.data) as string;
+      setLogLines((prev) => {
+        const next = [...prev, line];
+        return next.length > 500 ? next.slice(-500) : next;
+      });
+    };
+    return () => { es.close(); esRef.current = null; };
+  }, [isRunning]);
+
+  // Auto-scroll to bottom when new lines arrive.
+  useEffect(() => {
+    if (showLog && logRef.current) {
+      logRef.current.scrollTop = logRef.current.scrollHeight;
+    }
+  }, [logLines, showLog]);
 
   if (!job) return null;
 
@@ -398,8 +414,14 @@ function JobBanner({ job, onDismiss }: { job: JobStatus | null; onDismiss: () =>
             <span className="text-violet-300 text-xs truncate">— {job.stage_label}</span>
           )}
           {job.rows_added > 0 && (
-            <span className="ml-auto text-violet-400 text-xs flex-shrink-0">{job.rows_added} rows</span>
+            <span className="text-violet-400 text-xs">{job.rows_added} rows</span>
           )}
+          <button
+            onClick={() => setShowLog((v) => !v)}
+            className="ml-auto text-violet-400 hover:text-violet-200 text-xs flex-shrink-0"
+          >
+            {showLog ? "Hide logs ▲" : "Show logs ▼"}
+          </button>
         </div>
         {pct !== null && (
           <div className="h-0.5 bg-violet-900">
@@ -407,6 +429,27 @@ function JobBanner({ job, onDismiss }: { job: JobStatus | null; onDismiss: () =>
               className="h-full bg-violet-500 transition-all duration-500"
               style={{ width: `${pct}%` }}
             />
+          </div>
+        )}
+        {showLog && (
+          <div
+            ref={logRef}
+            className="max-h-48 overflow-y-auto bg-black/60 px-4 py-2 font-mono text-xs leading-relaxed"
+          >
+            {logLines.length === 0 ? (
+              <span className="text-zinc-600">Waiting for output...</span>
+            ) : (
+              logLines.map((line, i) => (
+                <div key={i} className={
+                  line.includes("ERROR") || line.includes("TIMEOUT") ? "text-red-400" :
+                  line.includes("new rows") ? "text-green-400" :
+                  line.includes("starting...") ? "text-zinc-400" :
+                  "text-zinc-300"
+                }>
+                  {line}
+                </div>
+              ))
+            )}
           </div>
         )}
       </div>
@@ -558,7 +601,6 @@ export default function Dashboard() {
   const handleAction = async (id: string, action: string, value?: unknown) => {
     const statusMap: Record<string, string> = {
       dismiss: "dismissed",
-      purchase: "purchased",
       undo: "active",
     };
 
@@ -593,13 +635,8 @@ export default function Dashboard() {
   function formatLastRun(iso: string | null): string {
     if (!iso) return "never";
     const d = new Date(iso);
-    const diff = Math.floor((Date.now() - d.getTime()) / 1000);
-    if (diff < 60) return "just now";
-    if (diff < 3600) return `${Math.floor(diff / 60)}m ago`;
     const date = d.toLocaleDateString(undefined, { month: "short", day: "numeric" });
     const time = d.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
-    if (diff < 86400) return `today ${time}`;
-    if (diff < 172800) return `yesterday ${time}`;
     return `${date} ${time}`;
   }
 

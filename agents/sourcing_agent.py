@@ -13,12 +13,15 @@ Sources: CarGurus, Cars.com, CarMax, Carvana, dealer sites.
 import json
 import os
 import re
+import sys
 import time
 import traceback
 from datetime import datetime, timezone
 from dotenv import load_dotenv
 
 load_dotenv(os.path.join(os.path.dirname(__file__), "..", ".env.local"))
+
+sys.stdout.reconfigure(line_buffering=True)
 
 from psycopg2.errors import UniqueViolation
 from tools.db import fetch_one, fetch_all, execute, get_conn
@@ -27,7 +30,7 @@ from tools.scrapers import (
     scrape_carscom, enrich_listings_from_detail,
 )
 from tools.dealer_scraper import scrape_all_dealers
-from tools.base_trims import get_allowed_makes, get_allowed_models, get_vehicles, is_trim_allowed, get_model_min_year, get_model_max_year, get_trim_min_year, get_trim_max_year, trim_belongs_to_different_model, canonical_trim, _VEHICLES, _norm
+from tools.base_trims import get_allowed_makes, get_allowed_models, get_vehicles, is_trim_allowed, get_model_min_year, get_model_max_year, get_trim_min_year, get_trim_max_year, trim_belongs_to_different_model, canonical_trim, _VEHICLES, _norm, split_xc60_model, split_cx50_model
 
 # Canonical make/model names from cars.json — used to normalise scraper-specific casing
 _CANONICAL_NAMES: dict[tuple[str, str], tuple[str, str]] = {
@@ -49,20 +52,24 @@ DEALER_SOURCE = "dealer"
 
 
 _FORCE_MODE = False  # set to True by run(..., force=True) to bypass cooldown without DB changes
+_refresh_log_cache: dict | None = None  # cached per run() call to avoid N identical DB queries
 
 
 def _should_skip_source(source: str) -> tuple[bool, str]:
     """Return (skip, reason). Skip if recently scraped with active results."""
     if _FORCE_MODE:
         return False, "force mode"
-    row = fetch_one(
-        """SELECT completed_at, source_results, source_errors
-           FROM refresh_log
-           WHERE completed_at IS NOT NULL
-             AND source_results IS NOT NULL
-           ORDER BY completed_at DESC
-           LIMIT 1"""
-    )
+    global _refresh_log_cache
+    if _refresh_log_cache is None:
+        _refresh_log_cache = fetch_one(
+            """SELECT completed_at, source_results, source_errors
+               FROM refresh_log
+               WHERE completed_at IS NOT NULL
+                 AND source_results IS NOT NULL
+               ORDER BY completed_at DESC
+               LIMIT 1"""
+        )
+    row = _refresh_log_cache
     if not row:
         return False, "no previous run"
 
@@ -113,16 +120,26 @@ def _get_known_urls_and_vins() -> tuple[set[str], set[str]]:
     return urls, vins
 
 
-def _get_known_fingerprints(exclude_source: str) -> set[tuple]:
-    """Return (year, mileage, price) tuples for non-expired listings from OTHER sources.
-    Catches cross-source duplicates when the new listing has no VIN (e.g. CarGurus blades)."""
+def _get_known_fingerprints(exclude_source: str) -> tuple[set[tuple], set[tuple]]:
+    """Return (price_fps, dealer_fps) for non-dismissed listings from OTHER sources.
+
+    price_fps  — exact (year, mileage, price) match; catches duplicates when price is identical.
+    dealer_fps — (dealer_name, year, mileage) match; catches cross-source duplicates when the
+                 same car is listed at slightly different prices on CarGurus vs the dealer site.
+    """
     rows = fetch_all(
-        "SELECT year, mileage, price FROM listings "
+        "SELECT make, model, year, mileage, price, dealer_name FROM listings "
         "WHERE source != %s AND status NOT IN ('dismissed') "
         "AND year IS NOT NULL AND mileage IS NOT NULL AND price IS NOT NULL",
         (exclude_source,)
     )
-    return {(r["year"], r["mileage"], r["price"]) for r in rows}
+    price_fps  = {(r["year"], r["mileage"], r["price"]) for r in rows}
+    dealer_fps = {
+        (r["dealer_name"], r["make"], r["model"], r["year"], r["mileage"])
+        for r in rows
+        if r["dealer_name"] and r["make"] and r["model"] and r["mileage"] is not None
+    }
+    return price_fps, dealer_fps
 
 
 _normalize_model = _norm  # identical to base_trims._norm; alias avoids duplication
@@ -166,10 +183,11 @@ def _is_valid(listing: dict, min_year: int, allowed_makes: list[str],
                     return False
     mileage = listing.get("mileage")
     if listing.get("condition", "used") == "used":
-        # Mileage is now extracted from the detail page for dealer listings,
-        # so null mileage after enrichment is OK — the max_mileage check handles overages.
-        if max_mileage and mileage is not None and mileage > max_mileage:
-            return False
+        # Reject rental/fleet usage: >14k miles/year indicates commercial use
+        if mileage is not None and year is not None:
+            years_old = max(1, datetime.now().year - int(year) + 1)
+            if mileage / years_old > 14_000:
+                return False
     trim = listing.get("trim")
     if not is_trim_allowed(make, model, trim):
         return False
@@ -179,6 +197,10 @@ def _is_valid(listing: dict, min_year: int, allowed_makes: list[str],
         return False
     if allowed_models:
         normalized = _normalize_model(model)
+        if normalized == "cx50":
+            raw_text = (listing.get("raw") or {}).get("text") if isinstance(listing.get("raw"), dict) else None
+            resolved_model = split_cx50_model(make, model, trim, raw_text)
+            normalized = _normalize_model(resolved_model)
         if not any(_normalize_model(am) == normalized for am in allowed_models):
             return False
     if year < min_year:
@@ -206,10 +228,9 @@ def _is_valid(listing: dict, min_year: int, allowed_makes: list[str],
 def _save_new(listing: dict) -> None:
     # Normalise make/model to canonical casing from cars.json (scrapers use ALL CAPS, title case, etc.)
     mk, mo = listing["make"], listing["model"]
-    # XC60 Recharge T8 PHEV listings share CarGurus model page with gas B5 — split by trim text
-    raw_trim = (listing.get("trim") or "").lower()
-    if mk.lower() == "volvo" and mo.lower() == "xc60" and "recharge" in raw_trim:
-        mo = "XC60 Recharge"
+    mo = split_xc60_model(mk, mo, listing.get("trim"))
+    raw_text = (listing.get("raw") or {}).get("text") if isinstance(listing.get("raw"), dict) else None
+    mo = split_cx50_model(mk, mo, listing.get("trim"), raw_text)
     canonical = _CANONICAL_NAMES.get((mk.lower(), mo.lower()))
     if canonical:
         mk, mo = canonical
@@ -292,16 +313,18 @@ def process_source(
     """
     skip, reason = _should_skip_source(source)
     if skip:
-        print(f"  [{source}] SKIP — {reason}")
+        print(f"  [{source}] SKIP — {reason}", flush=True)
         return {"source": source, "skipped": True, "reason": reason, "found": 0, "new": 0, "updated": 0, "errors": None}
 
-    print(f"  [{source}] Scraping (radius={radius} mi)...")
+    print(f"  [{source}] Scraping (radius={radius} mi)...", flush=True)
     kwargs: dict = {}
-    if max_year and source.startswith("cargurus"):
+    if max_year:
         kwargs["max_year"] = max_year
     if source in ("cargurus", "carmax", "carscom"):
         kwargs["radius"] = radius
-    if vehicles and not source.startswith("cargurus"):
+    if source == "carscom":
+        kwargs["clean_history"] = True
+    if vehicles:
         kwargs["vehicles"] = vehicles
 
     listings = []
@@ -313,22 +336,22 @@ def process_source(
         except Exception as e:
             last_err = e
             wait = 2 ** attempt
-            print(f"  [{source}] attempt {attempt} failed: {e}  (retry in {wait}s)")
+            print(f"  [{source}] attempt {attempt} failed: {e}  (retry in {wait}s)", flush=True)
             if attempt < 3:
                 time.sleep(wait)
     else:
-        print(f"  [{source}] ERROR after 3 attempts — {last_err}")
+        print(f"  [{source}] ERROR after 3 attempts — {last_err}", flush=True)
         traceback.print_exc()
         return {"source": source, "skipped": False, "found": 0, "new": 0, "updated": 0, "errors": str(last_err)}
 
-    print(f"  [{source}] Found {len(listings)} listings on page")
+    print(f"  [{source}] Found {len(listings)} listings on page", flush=True)
 
     known              = _get_known_ids(source)
     if known_urls is not None and known_vins is not None:
         _known_urls, _known_vins = known_urls, known_vins
     else:
         _known_urls, _known_vins = _get_known_urls_and_vins()
-    known_fingerprints = _get_known_fingerprints(source)
+    known_price_fps, known_dealer_fps = _get_known_fingerprints(source)
     new_count = 0
     updated_count = 0
     skipped_count = 0
@@ -346,7 +369,11 @@ def process_source(
             skipped_count += 1
             continue
         fp = (listing.get("year"), listing.get("mileage"), listing.get("price"))
-        if all(v is not None for v in fp) and fp in known_fingerprints:
+        if all(v is not None for v in fp) and fp in known_price_fps:
+            skipped_count += 1
+            continue
+        dfp = (listing.get("dealer_name"), listing.get("make"), listing.get("model"), listing.get("year"), listing.get("mileage"))
+        if all(v is not None for v in dfp) and dfp in known_dealer_fps:
             skipped_count += 1
             continue
         url = listing.get("listing_url", "")
@@ -369,7 +396,7 @@ def process_source(
         for listing in candidates:
             listing["accident_count"] = None
             listing["title_status"] = None
-        print(f"  [{source}] Fetching history for {len(candidates)} new listing(s)...")
+        print(f"  [{source}] Fetching history for {len(candidates)} new listing(s)...", flush=True)
         candidates = enrich_listings_from_detail(candidates)
 
     # Pass 3: save/update
@@ -396,9 +423,12 @@ def process_source(
             _save_new(listing)
             if vin: _known_vins.add(vin)
             _known_urls.add(url)
+            cur_fp = (listing.get("year"), listing.get("mileage"), listing.get("price"))
+            if all(v is not None for v in cur_fp):
+                known_price_fps.add(cur_fp)
             new_count += 1
         except Exception as e:
-            print(f"  [{source}] listing error (skipping): {e}")
+            print(f"  [{source}] listing error (skipping): {e}", flush=True)
             skipped_count += 1
 
     for _, ext_id, new_price, old_price in existing:
@@ -407,10 +437,10 @@ def process_source(
             if price_changed:
                 updated_count += 1
         except Exception as e:
-            print(f"  [{source}] touch error (skipping): {e}")
+            print(f"  [{source}] touch error (skipping): {e}", flush=True)
 
     enrich_note = f", {enrichment_failed} enrichment-failed" if enrichment_failed else ""
-    print(f"  [{source}] {new_count} new, {updated_count} price changes, {skipped_count} filtered{enrich_note}")
+    print(f"  [{source}] {new_count} new, {updated_count} price changes, {skipped_count} filtered{enrich_note}", flush=True)
     return {
         "source": source,
         "skipped": False,
@@ -429,7 +459,8 @@ def run(run_id: str = "", force: bool = False) -> dict:
     allowed_models = get_allowed_models()
     vehicles       = get_vehicles()          # [(make, model)] for targeted model filtering
     max_price      = settings.get("max_price", 35000)
-    max_mileage    = settings.get("max_mileage", 30000)
+    # Set max_mileage to 999999 to disable hard mileage ceiling (rely on mileage-per-year/rental check)
+    max_mileage    = 999999
     min_year       = settings.get("min_year", 2025)
     max_year       = settings.get("max_year", 2026)
     # Lower the scrape floor if any model has an earlier per-model min_year.
@@ -439,8 +470,9 @@ def run(run_id: str = "", force: bool = False) -> dict:
     if scrape_min_year < min_year:
         min_year = scrape_min_year
 
-    global _FORCE_MODE
+    global _FORCE_MODE, _refresh_log_cache
     _FORCE_MODE = force
+    _refresh_log_cache = None  # reset per-run cache
 
     try:
         source_results: dict[str, int] = {}
@@ -462,12 +494,12 @@ def run(run_id: str = "", force: bool = False) -> dict:
                 source_errors[source] = stats["errors"]
 
         # Dealer websites — reuse the same shared sets (already updated by SCRAPERS loop)
-        print("  [dealer] Scraping authorized dealer sites...")
+        print("  [dealer] Scraping authorized dealer sites...", flush=True)
         known_dealer = _get_known_ids("dealer")
-        known_fingerprints = _get_known_fingerprints("dealer")
+        known_dealer_price_fps, known_dealer_dfps = _get_known_fingerprints("dealer")
         dealer_total = dealer_new = dealer_skipped = 0
         try:
-            for listing in scrape_all_dealers(makes, min_year, max_year):
+            for listing in scrape_all_dealers(makes, min_year, max_year, force=_FORCE_MODE):
                 dealer_total += 1
                 if not _is_valid(listing, min_year, makes, allowed_models, max_year, max_price, max_mileage, radius):
                     dealer_skipped += 1
@@ -481,7 +513,11 @@ def run(run_id: str = "", force: bool = False) -> dict:
                     dealer_skipped += 1
                     continue
                 fp = (listing.get("year"), listing.get("mileage"), listing.get("price"))
-                if all(v is not None for v in fp) and fp in known_fingerprints:
+                if all(v is not None for v in fp) and fp in known_dealer_price_fps:
+                    dealer_skipped += 1
+                    continue
+                dfp = (listing.get("dealer_name"), listing.get("make"), listing.get("model"), listing.get("year"), listing.get("mileage"))
+                if all(v is not None for v in dfp) and dfp in known_dealer_dfps:
                     dealer_skipped += 1
                     continue
                 ext_id = str(listing["external_id"])
@@ -491,15 +527,17 @@ def run(run_id: str = "", force: bool = False) -> dict:
                     if vin: shared_known_vins.add(vin)
                     shared_known_urls.add(url)
                     if all(v is not None for v in fp):
-                        known_fingerprints.add(fp)
+                        known_dealer_price_fps.add(fp)
+                    if all(v is not None for v in dfp):
+                        known_dealer_dfps.add(dfp)
                     dealer_new += 1
                 else:
                     _touch_existing("dealer", ext_id, listing["price"], known_dealer[ext_id])
             source_results[DEALER_SOURCE] = dealer_total
-            print(f"  [dealer] {dealer_new} new, {dealer_skipped} filtered from {dealer_total} raw")
+            print(f"  [dealer] {dealer_new} new, {dealer_skipped} filtered from {dealer_total} raw", flush=True)
         except Exception as e:
             source_errors[DEALER_SOURCE] = str(e)
-            print(f"  [dealer] ERROR: {e}")
+            print(f"  [dealer] ERROR: {e}", flush=True)
 
         return {"source_results": source_results, "source_errors": source_errors}
     finally:

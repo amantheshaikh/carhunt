@@ -3,9 +3,9 @@ import { execFile } from "child_process";
 import fs from "fs";
 
 export async function POST(req: NextRequest) {
-  const { question } = await req.json();
-  if (!question?.trim()) {
-    return NextResponse.json({ error: "No question provided" }, { status: 400 });
+  const { question, history } = await req.json();
+  if (!question?.trim() && (!history || history.length === 0)) {
+    return NextResponse.json({ error: "No question or history provided" }, { status: 400 });
   }
 
   const agentsDir = process.env.AGENTS_DIR ?? "agents";
@@ -18,11 +18,13 @@ export async function POST(req: NextRequest) {
     );
   }
 
+  const payload = history || [{ role: "user", content: question }];
+
   return new Promise<NextResponse>((resolve) => {
-    execFile(
+    const child = execFile(
       venvPython,
-      ["query_agent.py", question],
-      { cwd: agentsDir, timeout: 30_000 },
+      ["query_agent.py"],
+      { cwd: agentsDir, timeout: 60_000 },
       (err, stdout, stderr) => {
         if (err) {
           console.error("[query_agent] error:", stderr);
@@ -37,5 +39,8 @@ export async function POST(req: NextRequest) {
         }
       }
     );
+
+    child.stdin?.write(JSON.stringify(payload));
+    child.stdin?.end();
   });
 }

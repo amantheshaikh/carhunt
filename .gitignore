@@ -23,3 +23,10 @@ __pycache__/
 
 # Logs
 *.log
+
+# Cache and build outputs
+tsconfig.tsbuildinfo
+.browser_profiles/
+.trim_cache.json
+.pytest_cache/
+.claude/

@@ -1,6 +1,6 @@
 # CarHunt
 
-Weekly used car deal tracker. Scrapes CarGurus, AutoTrader, CarMax, and Carvana every Monday, scores every listing by value-for-money, and surfaces the top deals in a local dashboard.
+Personal used-car deal tracker for the Atlanta metro area. Scrapes CarGurus, Cars.com, CarMax, Carvana, and local dealer websites for target vehicle configurations, scores each listing with an ML fair-price model, and surfaces the best deals in a Next.js dashboard.
 
 ---
 
@@ -35,9 +35,11 @@ Edit `.env.local`:
 ```
 DATABASE_URL=postgresql://carhunt:carhunt@localhost:5432/carhunt
 OPENROUTER_API_KEY=your_key_here
+AGENTS_DIR=/path/to/carhunt/agents
+AGENTS_PYTHON=/path/to/carhunt/agents/.venv/bin/python3
 ```
 
-Get an OpenRouter key at [openrouter.ai](https://openrouter.ai). The app uses `google/gemma-4-31b-it:free` by default — no credit card required.
+Get an OpenRouter key at [openrouter.ai](https://openrouter.ai). The app uses `deepseek/deepseek-v4-flash` for LLM calls (insight extraction, trim normalization, refresh summaries).
 
 ### 3. Install Node dependencies
 
@@ -70,7 +72,7 @@ Open [http://localhost:3000](http://localhost:3000).
 
 ### Running a refresh
 
-Click **Refresh Now** in the dashboard, or run directly from the terminal:
+Click **Refresh Now** in the dashboard, or run directly:
 
 ```bash
 cd agents
@@ -78,7 +80,22 @@ source .venv/bin/activate
 python orchestrator.py
 ```
 
-This runs the full pipeline: scrape all 4 sources → score every listing → write results to DB. Takes 2–5 minutes depending on site response times.
+This runs the full pipeline: scrape all sources → refresh price cache → retrain ML model → score all listings. Takes 5–15 minutes depending on site response times and the number of new listings.
+
+### Forcing a scrape (bypass 6h cooldown)
+
+```bash
+python agents/sourcing_agent.py --force
+```
+
+### Retraining the ML model without re-scraping
+
+```bash
+cd agents && python3 -c "
+from dotenv import load_dotenv; load_dotenv('../.env.local')
+from tools.price_model import train; train()
+"
+```
 
 ---
 
@@ -86,49 +103,48 @@ This runs the full pipeline: scrape all 4 sources → score every listing → wr
 
 ```
 carhunt/
-├── app/                  # Next.js App Router
-│   ├── api/              # API routes (listings, contact, refresh, settings)
-│   └── page.tsx          # Dashboard entry point
-├── components/           # React components (Dashboard, ListingCard, ListingDetail)
-├── lib/                  # Shared TypeScript (DB client, types)
-├── agents/               # Python agents
-│   ├── orchestrator.py   # Sequences sourcing → analysis
-│   ├── sourcing_agent.py # Scrapes all 4 sources via Playwright
-│   ├── analysis_agent.py # Scores every listing (Value Score 0–100)
-│   ├── communication_agent.py  # Generates inquiry text, logs contacts
-│   └── tools/            # Shared utilities (DB, scrapers, scoring, reliability)
+├── app/                        # Next.js App Router
+│   ├── api/                    # API routes (listings, refresh, query, settings, logs)
+│   └── page.tsx                # Dashboard entry point
+├── components/                 # React components (Dashboard, ListingCard, ListingDetail)
+├── lib/                        # Shared TypeScript (DB client, types, vehicle-tags)
+├── agents/                     # Python scraping + ML pipeline
+│   ├── orchestrator.py         # Entry point: Sourcing → Price cache → Retrain → Score
+│   ├── sourcing_agent.py       # Scrapes all sources, diffs against DB, enriches new listings
+│   ├── analysis_agent.py       # Scores listings with GB model → listing_scores
+│   ├── query_agent.py          # Natural-language query CLI (spawned by /api/query)
+│   ├── training_collector.py   # Collects broad market data for ML training
+│   ├── backfill_training.py    # Targeted fix/rescrape of training data for one model
+│   ├── cars.json               # Target vehicles + trim allowlists
+│   └── tools/
+│       ├── scrapers.py         # Playwright scrapers: CarGurus, Cars.com, CarMax, Carvana
+│       ├── dealer_scraper.py   # Playwright + API scraper for dealer websites
+│       ├── db.py               # psycopg2 helpers
+│       ├── scoring.py          # score_listing() + drivetrain/powertrain detection
+│       ├── price_model.py      # HistGradientBoostingRegressor fair-price estimator
+│       ├── base_trims.py       # Trim allowlist + canonical_trim normalization (LLM fallback)
+│       └── log_tee.py          # stdout/stderr tee → /tmp/carhunt-refresh.log
 ├── db/
-│   └── schema.sql        # Full PostgreSQL schema
-├── docker-compose.yml    # PostgreSQL container
-└── .env.local            # API keys (not committed)
+│   └── schema.sql              # PostgreSQL schema
+├── docker-compose.yml          # PostgreSQL container
+└── .env.local                  # API keys and config (not committed)
 ```
 
 ---
 
 ## How the Value Score works
 
-Each listing is scored 0–100 based on:
+Each listing is scored 0–100 using `sigmoid((fair_price − listing_price) / fair_price × 11)`.
 
-| Component | Weight | Notes |
-|---|---|---|
-| Price vs. market | 30% | How far below median market price |
-| Mileage | 25% | Lower mileage = higher score |
-| Paperwork | 20% | Clean title + no accidents = 100 |
-| Reliability | 15% | Static lookup table by make/model |
-| Age | 10% | Newer = higher score |
+The fair price comes from a **Stacked Ensemble** (blended `HistGradientBoostingRegressor` + `KNeighborsRegressor` + `Ridge` regression, or standard `HistGradientBoostingRegressor` fallback for the global model) trained on broad market data for each target vehicle. Features: year, log-transformed mileage (`log1p(mileage)`), trim premium (dollar premium relative to base trim MSRP), drivetrain (FWD/AWD), powertrain (gas/hybrid/PHEV), and CPO status.
 
-Green badge ≥ 70 · Yellow 40–69 · Red < 40
-
----
-
-## Contacting a dealer
-
-1. Click **Contact Dealer** on any listing
-2. The pre-filled inquiry is copied to your clipboard automatically
-3. The listing URL opens in a new tab — paste the inquiry into the dealer's contact form
-4. The contact attempt is logged in the dashboard
-
-Edit the default inquiry template in **Settings**.
+| Score | Category |
+|---|---|
+| 88+ | Exceptional Deal |
+| 72–88 | Great Deal |
+| 58–72 | Good Deal |
+| 45–58 | Fair Price |
+| < 40 | Poor Value |
 
 ---
 
@@ -136,11 +152,11 @@ Edit the default inquiry template in **Settings**.
 
 **Scraper returns 0 results for a source**
 - Check `refresh_log.source_errors` in the DB or dashboard logs
-- Run with `headless=False` in `agents/tools/scrapers.py` → `_new_stealth_page()` to watch the browser live
-- Your residential IP is the main defence against bot detection — VPNs may cause blocks
+- Set `headless=True` → `headless=False` in `agents/tools/scrapers.py` to watch the browser live
+- Residential IP is the main defence against bot detection — VPNs may cause blocks
 
 **Dashboard shows "No listings here yet"**
-- Run `python orchestrator.py` manually to populate the DB
+- Run `python agents/orchestrator.py` manually to populate the DB
 
 **Database connection error**
 - Make sure Docker is running: `docker compose up -d`

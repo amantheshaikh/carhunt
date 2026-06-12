@@ -1,8 +1,8 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
-import type { Listing, ContactLog } from "@/lib/types";
-import { getDealCategory, getDealCategoryStyle } from "@/lib/vehicle-tags";
+import type { Listing } from "@/lib/types";
+import { getDealCategory, getDealCategoryStyle, getValueScore } from "@/lib/vehicle-tags";
 
 
 interface Props {
@@ -12,9 +12,6 @@ interface Props {
 }
 
 export default function ListingDetail({ listing: l, onClose, onAction }: Props) {
-  const [contactLog, setContactLog] = useState<ContactLog[]>([]);
-  const [note, setNote] = useState("");
-  const [copying, setCopying] = useState(false);
   const [editingField, setEditingField] = useState<string | null>(null);
   const [editValue, setEditValue] = useState<string>("");
   const [allowedTrims, setAllowedTrims] = useState<string[]>([]);
@@ -91,40 +88,7 @@ export default function ListingDetail({ listing: l, onClose, onAction }: Props) 
     if (e.key === "Escape") { setEditingField(null); }
   };
 
-  const refreshContactLog = useCallback(() => {
-    fetch(`/api/listings/${l.id}`)
-      .then((r) => r.json())
-      .then((d) => setContactLog(d.contactLog ?? []));
-  }, [l.id]);
-
-  useEffect(() => { refreshContactLog(); }, [refreshContactLog]);
-
-  const handleContact = async () => {
-    setCopying(true);
-    const res = await fetch("/api/contact", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ listing_id: l.id }),
-    });
-    const data = await res.json();
-    if (data.inquiry_text) {
-      await navigator.clipboard.writeText(data.inquiry_text);
-      window.open(l.listing_url, "_blank");
-      refreshContactLog();
-    }
-    setCopying(false);
-  };
-
-  const handleAddNote = async () => {
-    if (!note.trim()) return;
-    await fetch("/api/notes", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ listing_id: l.id, note }),
-    });
-    setNote("");
-    refreshContactLog();
-  };
+  // Removed contact and note handling
 
   return (
     <div className="p-6 space-y-6">
@@ -285,13 +249,13 @@ export default function ListingDetail({ listing: l, onClose, onAction }: Props) 
         </div>
 
         {/* vs market — read-only */}
-        {l.market_median_price && (
+        {l.fair_price && (
           <div className="bg-zinc-900 rounded-lg p-3 col-span-3">
             <p className="text-xs text-zinc-500">vs market</p>
-            <p className={`text-sm font-medium mt-0.5 ${l.price < l.market_median_price ? "text-green-400" : "text-red-400"}`}>
-              {l.price < l.market_median_price
-                ? `-$${(l.market_median_price - l.price).toLocaleString()} (${Math.round((l.market_median_price - l.price) / l.market_median_price * 100)}% below)`
-                : `+$${(l.price - l.market_median_price).toLocaleString()} (${Math.round((l.price - l.market_median_price) / l.market_median_price * 100)}% above)`}
+            <p className={`text-sm font-medium mt-0.5 ${l.price < l.fair_price ? "text-green-400" : "text-red-400"}`}>
+              {l.price < l.fair_price
+                ? `-$${(l.fair_price - l.price).toLocaleString()} (${Math.round((l.fair_price - l.price) / l.fair_price * 100)}% below)`
+                : `+$${(l.price - l.fair_price).toLocaleString()} (${Math.round((l.price - l.fair_price) / l.fair_price * 100)}% above)`}
             </p>
           </div>
         )}
@@ -299,11 +263,14 @@ export default function ListingDetail({ listing: l, onClose, onAction }: Props) 
         {/* MSRP / depreciation — read-only */}
         {(() => {
           if (!msrpByTrim || !l.trim) return null;
-          // Match base trim (strip drivetrain suffix like "FWD", "AWD", "4Motion")
           const baseTrim = l.trim.replace(/\s*(AWD|FWD|4MOTION|4WD)\s*/gi, "").trim();
-          const msrp = Object.entries(msrpByTrim).find(([k]) =>
-            baseTrim.toLowerCase().startsWith(k.toLowerCase())
-          )?.[1];
+          const drv = (l.drivetrain || "").toLowerCase();
+          // Try drivetrain-specific key first (e.g. "SE R-Line Black AWD"), then base trim
+          const lookupKeys = drv ? [`${baseTrim} ${drv.toUpperCase()}`, baseTrim] : [baseTrim];
+          const sortedEntries = Object.entries(msrpByTrim).sort((a, b) => b[0].length - a[0].length);
+          const msrp = lookupKeys
+            .map(lk => sortedEntries.find(([k]) => lk.toLowerCase().startsWith(k.toLowerCase()))?.[1])
+            .find(Boolean);
           if (!msrp) return null;
           const retained = Math.round((l.price / msrp) * 100);
           const depreciation = 100 - retained;
@@ -355,21 +322,24 @@ export default function ListingDetail({ listing: l, onClose, onAction }: Props) 
         </div>
       )}
 
-      {/* Score + SHAP breakdown */}
+      {/* Score Breakdown */}
       {l.value_score != null && (
         <div className="space-y-3">
-          {/* Deal category + score bar */}
+          {/* Primary score header */}
           <div className="space-y-1.5">
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-2">
                 <p className="text-sm font-medium text-zinc-300">Deal Rating</p>
+                <span className="text-xs text-zinc-500 bg-zinc-800/60 px-1.5 py-0.5 rounded font-mono">
+                  {l.shap_values?.gb_pred !== undefined && l.shap_values?.knn_pred ? "Stacked Blend" : "Gradient Boosting"}
+                </span>
                 {getDealCategory(l.value_score) && (
                   <span className={`px-2 py-0.5 text-xs font-semibold rounded-md ${getDealCategoryStyle(l.value_score)}`}>
                     {getDealCategory(l.value_score)}
                   </span>
                 )}
               </div>
-              <span className="text-xs text-zinc-600">{Math.round(l.value_score)} / 100</span>
+              <span className="text-xs text-zinc-600">{l.value_score} / 100</span>
             </div>
             <div className="w-full bg-zinc-800 rounded-full h-2">
               <div
@@ -381,29 +351,96 @@ export default function ListingDetail({ listing: l, onClose, onAction }: Props) 
                 style={{ width: `${Math.min(100, Math.max(0, l.value_score))}%` }}
               />
             </div>
-            {l.market_median_price && (() => {
-              const diff = l.market_median_price - l.price;
-              const pct = ((diff / l.market_median_price) * 100).toFixed(1);
+            {l.fair_price && (() => {
+              const diff = l.fair_price - l.price;
+              const pct  = ((Math.abs(diff) / l.fair_price) * 100).toFixed(1);
               return (
                 <p className={`text-xs font-medium ${diff > 0 ? "text-green-400" : "text-red-400"}`}>
                   {diff > 0
-                    ? `$${diff.toLocaleString()} (${pct}%) below fair value of $${l.market_median_price.toLocaleString()}`
-                    : `$${Math.abs(diff).toLocaleString()} (${Math.abs(Number(pct))}%) above fair value of $${l.market_median_price.toLocaleString()}`}
+                    ? `$${diff.toLocaleString()} (${pct}%) below fair value of $${l.fair_price.toLocaleString()}`
+                    : `$${Math.abs(diff).toLocaleString()} (${pct}%) above fair value of $${l.fair_price.toLocaleString()}`}
                 </p>
               );
             })()}
           </div>
 
-          {/* SHAP waterfall — why is the fair value what it is? */}
+          {/* Ensemble Estimator Influence */}
+          {l.shap_values && l.shap_values.gb_pred !== undefined && (
+            <div className="space-y-2 pt-2 border-t border-zinc-800">
+              <p className="text-xs font-medium text-zinc-400">Ensemble Estimator Influence</p>
+              <div className="grid grid-cols-3 gap-2">
+                {[
+                  {
+                    name: "Gradient Boosting (GB)",
+                    pred: l.shap_values.gb_pred,
+                    weight: l.shap_values.meta_weights?.[0] ?? 1.0,
+                    color: "bg-purple-500",
+                    textColor: "text-purple-300",
+                    bgColor: "bg-purple-950/20 border-purple-900/30",
+                  },
+                  {
+                    name: "K-Nearest Neighbors (KNN)",
+                    pred: l.shap_values.knn_pred,
+                    weight: l.shap_values.meta_weights?.[1] ?? 0.0,
+                    color: "bg-amber-500",
+                    textColor: "text-amber-300",
+                    bgColor: "bg-amber-950/20 border-amber-900/30",
+                  },
+                  {
+                    name: "Ridge Regression",
+                    pred: l.shap_values.ridge_pred,
+                    weight: l.shap_values.meta_weights?.[2] ?? 0.0,
+                    color: "bg-cyan-500",
+                    textColor: "text-cyan-300",
+                    bgColor: "bg-cyan-950/20 border-cyan-900/30",
+                  }
+                ].map((model, idx) => {
+                  if (model.pred == null) return null;
+                  const score = getValueScore(l.price, model.pred);
+                  const weightPct = Math.round(model.weight * 100);
+                  if (weightPct === 0 && model.weight === 0) return null;
+                  return (
+                    <div key={idx} className={`p-2.5 rounded-lg border flex flex-col justify-between ${model.bgColor}`}>
+                      <div>
+                        <div className="flex items-center justify-between">
+                          <span className="text-[10px] font-semibold text-zinc-400 tracking-wider uppercase truncate max-w-[70%]">
+                            {model.name.split(" ")[0]}
+                          </span>
+                          <span className={`text-[10px] font-bold ${model.textColor}`}>
+                            {weightPct}%
+                          </span>
+                        </div>
+                        <p className="text-xs font-mono font-bold text-zinc-100 mt-1">
+                          ${model.pred.toLocaleString()}
+                        </p>
+                      </div>
+                      <div className="mt-2.5">
+                        <div className="flex items-center justify-between text-[10px] text-zinc-500 mb-0.5">
+                          <span>Score</span>
+                          <span className="font-mono text-zinc-300">{score ?? "N/A"}</span>
+                        </div>
+                        <div className="w-full bg-zinc-800/50 rounded-full h-1">
+                          <div
+                            className={`h-1 rounded-full ${model.color}`}
+                            style={{ width: `${score ?? 0}%` }}
+                          />
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
+          {/* SHAP waterfall — GB model */}
           {l.shap_values && (
             <div className="space-y-1.5 pt-1 border-t border-zinc-800">
-              <p className="text-xs font-medium text-zinc-400">Why ${l.shap_values.predicted.toLocaleString()} fair value?</p>
-              {/* Base row */}
+              <p className="text-xs font-medium text-zinc-400">GB SHAP Breakdown — why ${l.shap_values.predicted.toLocaleString()} fair value?</p>
               <div className="flex items-center justify-between text-xs">
                 <span className="text-zinc-500">Average {l.model} price</span>
                 <span className="text-zinc-400 font-mono">${l.shap_values.base_value.toLocaleString()}</span>
               </div>
-              {/* Feature rows */}
               {(() => {
                 const maxDelta = Math.max(...l.shap_values!.features.map(f => Math.abs(f.delta)), 1);
                 return l.shap_values!.features.map((f, i) => (
@@ -416,19 +453,13 @@ export default function ListingDetail({ listing: l, onClose, onAction }: Props) 
                             <div className="h-1.5 bg-zinc-800 rounded" style={{ width: "100%" }} />
                           </div>
                           <div className="w-16">
-                            <div
-                              className="h-1.5 bg-green-500 rounded"
-                              style={{ width: `${Math.round((f.delta / maxDelta) * 100)}%` }}
-                            />
+                            <div className="h-1.5 bg-green-500 rounded" style={{ width: `${Math.round((f.delta / maxDelta) * 100)}%` }} />
                           </div>
                         </>
                       ) : (
                         <>
                           <div className="w-16 flex justify-end">
-                            <div
-                              className="h-1.5 bg-red-500 rounded"
-                              style={{ width: `${Math.round((Math.abs(f.delta) / maxDelta) * 100)}%` }}
-                            />
+                            <div className="h-1.5 bg-red-500 rounded" style={{ width: `${Math.round((Math.abs(f.delta) / maxDelta) * 100)}%` }} />
                           </div>
                           <div className="w-16">
                             <div className="h-1.5 bg-zinc-800 rounded" style={{ width: "100%" }} />
@@ -442,7 +473,6 @@ export default function ListingDetail({ listing: l, onClose, onAction }: Props) 
                   </div>
                 ));
               })()}
-              {/* Total row */}
               <div className="flex items-center justify-between text-xs pt-1 border-t border-zinc-800">
                 <span className="text-zinc-300 font-medium">Fair value</span>
                 <span className="text-white font-mono font-medium">${l.shap_values.predicted.toLocaleString()}</span>
@@ -452,85 +482,27 @@ export default function ListingDetail({ listing: l, onClose, onAction }: Props) 
         </div>
       )}
 
-      {/* Dealer contact */}
-      <div className="space-y-2">
-        <p className="text-sm font-medium text-zinc-300">Contact Dealer</p>
-        <div className="flex gap-2">
-          <button
-            onClick={handleContact}
-            disabled={copying}
-            className="flex-1 py-2 text-sm bg-blue-900 hover:bg-blue-800 text-blue-200 rounded-lg disabled:opacity-50 transition-colors"
-          >
-            {copying ? "Copied!" : "Copy Inquiry + Open Listing"}
-          </button>
-          <a
-            href={l.listing_url}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="px-4 py-2 text-sm bg-zinc-800 hover:bg-zinc-700 text-zinc-300 rounded-lg transition-colors"
-          >
-            Open
-          </a>
-        </div>
-        {l.dealer_phone && (
-          <a
-            href={`tel:${l.dealer_phone}`}
-            className="block text-center py-2 text-sm bg-zinc-800 hover:bg-zinc-700 text-zinc-300 rounded-lg transition-colors"
-          >
-            Call {l.dealer_phone}
-          </a>
-        )}
-      </div>
-
       {/* Actions */}
       <div className="flex flex-wrap gap-2">
-        {["new", "active", "contacted"].includes(l.status) && (
+        {["new", "active"].includes(l.status) && (
           <>
             <button onClick={() => onAction(l.id, "snooze")} className="px-3 py-1.5 text-xs bg-zinc-800 hover:bg-zinc-700 text-zinc-300 rounded-lg">Snooze 7d</button>
             <button onClick={() => onAction(l.id, "dismiss")} className="px-3 py-1.5 text-xs bg-zinc-800 hover:bg-zinc-700 text-zinc-300 rounded-lg">Mark Dismissed</button>
-            <button onClick={() => onAction(l.id, "purchase")} className="px-3 py-1.5 text-xs bg-green-900 hover:bg-green-800 text-green-300 rounded-lg">I Bought This</button>
           </>
         )}
         {l.status === "dismissed" && (
           <button onClick={() => onAction(l.id, "undo")} className="px-3 py-1.5 text-xs bg-zinc-800 hover:bg-zinc-700 text-zinc-300 rounded-lg">Restore</button>
         )}
-      </div>
-
-      {/* Contact log */}
-      <div className="space-y-2">
-        <p className="text-sm font-medium text-zinc-300">Contact Log</p>
-        {contactLog.length === 0 ? (
-          <p className="text-xs text-zinc-600">No contacts yet.</p>
-        ) : (
-          <div className="space-y-1">
-            {contactLog.map((entry) => (
-              <div key={entry.id} className="flex gap-3 text-xs text-zinc-400">
-                <span className="text-zinc-600 flex-shrink-0">
-                  {new Date(entry.contacted_at).toLocaleDateString()}
-                </span>
-                <span className="capitalize text-zinc-500">{entry.channel}</span>
-                {entry.note && <span className="text-zinc-300">{entry.note}</span>}
-              </div>
-            ))}
-          </div>
-        )}
-
-        {/* Add note */}
-        <div className="flex gap-2 mt-2">
-          <input
-            value={note}
-            onChange={(e) => setNote(e.target.value)}
-            onKeyDown={(e) => e.key === "Enter" && handleAddNote()}
-            placeholder="Add a note..."
-            className="flex-1 px-3 py-1.5 text-xs bg-zinc-900 border border-zinc-700 rounded-lg text-zinc-200 placeholder-zinc-600 focus:outline-none focus:border-zinc-500"
-          />
-          <button
-            onClick={handleAddNote}
-            className="px-3 py-1.5 text-xs bg-zinc-800 hover:bg-zinc-700 text-zinc-300 rounded-lg"
+        {l.listing_url && (
+          <a
+            href={l.listing_url}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="px-3 py-1.5 text-xs bg-blue-900 hover:bg-blue-800 text-blue-200 rounded-lg text-center font-medium"
           >
-            Add
-          </button>
-        </div>
+            Open Listing ↗
+          </a>
+        )}
       </div>
     </div>
   );

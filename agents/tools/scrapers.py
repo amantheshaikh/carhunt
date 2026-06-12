@@ -19,6 +19,17 @@ try:
 except ImportError:
     _OpenAI = None
 
+# Shared client — instantiated once when the first LLM call is made, reused thereafter.
+_llm_client = None
+
+def _get_llm_client():
+    global _llm_client
+    if _llm_client is None and _OpenAI is not None:
+        api_key = os.environ.get("OPENROUTER_API_KEY")
+        if api_key:
+            _llm_client = _OpenAI(base_url="https://openrouter.ai/api/v1", api_key=api_key)
+    return _llm_client
+
 from playwright.async_api import async_playwright
 from playwright_stealth import Stealth
 
@@ -124,15 +135,16 @@ async def _stealth_browser(playwright):
 # Carvana
 # ---------------------------------------------------------------------------
 
-async def _scrape_carvana_async(zip_code, makes, max_price, max_mileage, min_year, vehicles=None):
+async def _scrape_carvana_async(zip_code, makes, max_price, max_mileage, min_year, vehicles=None, max_year=None):
     # Carvana is nationwide — no radius param. Model filter uses base name only;
     # hybrid vs non-hybrid is indistinguishable in the URL so _is_valid() handles post-scrape.
     make_str  = "&".join(f"make={m.lower()}" for m in makes)
     model_str = _base_model_params(vehicles, "model")
+    year_max_str = f"&maxYear={max_year}" if max_year else ""
     url = (
         f"https://www.carvana.com/cars?"
         f"zip={zip_code}&maxPrice={max_price}&maxMileage={max_mileage}"
-        f"&minYear={min_year}&{make_str}"
+        f"&minYear={min_year}{year_max_str}&{make_str}"
         + (f"&{model_str}" if model_str else "")
     )
 
@@ -195,7 +207,8 @@ async def _scrape_carvana_async(zip_code, makes, max_price, max_mileage, min_yea
             await page.goto(url, wait_until="domcontentloaded", timeout=30_000)
             await page.wait_for_timeout(8_000)
             # Scroll to load all lazy-loaded listings
-            prev_count = 0
+            items = []
+            prev_count = -1
             for _ in range(6):
                 await page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
                 await page.wait_for_timeout(2_000)
@@ -203,14 +216,13 @@ async def _scrape_carvana_async(zip_code, makes, max_price, max_mileage, min_yea
                 if len(items) == prev_count:
                     break
                 prev_count = len(items)
-            raw_items = await _fetch_carvana_items(page)
-            return _parse_carvana_items(raw_items)
+            return _parse_carvana_items(items)
         finally:
             await browser.close()
 
 
-def scrape_carvana(zip_code, makes, max_price, max_mileage, min_year, vehicles=None):
-    return _run(_scrape_carvana_async(zip_code, makes, max_price, max_mileage, min_year, vehicles=vehicles))
+def scrape_carvana(zip_code, makes, max_price, max_mileage, min_year, vehicles=None, max_year=None):
+    return _run(_scrape_carvana_async(zip_code, makes, max_price, max_mileage, min_year, vehicles=vehicles, max_year=max_year))
 
 
 # ---------------------------------------------------------------------------
@@ -264,14 +276,15 @@ def _parse_carmax_tile(text: str, stock_num: str, min_year: int) -> dict | None:
     }
 
 
-async def _scrape_carmax_async(zip_code, makes, max_price, max_mileage, min_year, radius=500, vehicles=None):
+async def _scrape_carmax_async(zip_code, makes, max_price, max_mileage, min_year, radius=500, vehicles=None, max_year=None):
     make_str  = "&".join(f"makes[]={m}" for m in makes)
     # CarMax model codes use base model only (no "Hybrid" suffix in URL)
     model_str = _base_model_params(vehicles, "models[]", lower=False)
+    year_max_str = f"&maxYear={max_year}" if max_year else ""
     url = (
         f"https://www.carmax.com/cars?"
         f"zip={zip_code}&maxPrice={max_price}&maxMileage={max_mileage}"
-        f"&minYear={min_year}&radius={radius}&{make_str}"
+        f"&minYear={min_year}{year_max_str}&radius={radius}&{make_str}"
         + (f"&{model_str}" if model_str else "")
     )
 
@@ -291,7 +304,8 @@ async def _scrape_carmax_async(zip_code, makes, max_price, max_mileage, min_year
             await page.goto(url, wait_until="domcontentloaded", timeout=30_000)
             await page.wait_for_timeout(8_000)
             # Scroll to trigger lazy loading
-            prev_count = 0
+            tiles: list[dict] = []
+            prev_count = -1
             for _ in range(5):
                 await page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
                 await page.wait_for_timeout(2_000)
@@ -299,7 +313,6 @@ async def _scrape_carmax_async(zip_code, makes, max_price, max_mileage, min_year
                 if len(tiles) == prev_count:
                     break
                 prev_count = len(tiles)
-            tiles = await _fetch_tiles(page)
             listings = []
             seen = set()
             for tile in tiles:
@@ -315,8 +328,8 @@ async def _scrape_carmax_async(zip_code, makes, max_price, max_mileage, min_year
             await browser.close()
 
 
-def scrape_carmax(zip_code, makes, max_price, max_mileage, min_year, radius=500, vehicles=None):
-    return _run(_scrape_carmax_async(zip_code, makes, max_price, max_mileage, min_year, radius=radius, vehicles=vehicles))
+def scrape_carmax(zip_code, makes, max_price, max_mileage, min_year, radius=500, vehicles=None, max_year=None):
+    return _run(_scrape_carmax_async(zip_code, makes, max_price, max_mileage, min_year, radius=radius, vehicles=vehicles, max_year=max_year))
 
 
 # ---------------------------------------------------------------------------
@@ -326,7 +339,7 @@ def scrape_carmax(zip_code, makes, max_price, max_mileage, min_year, radius=500,
 # Bonus: captures CarGurus deal rating (Great/Good/Fair Deal) stored in raw.
 # ---------------------------------------------------------------------------
 
-def _parse_cargurus_blade(text: str, href: str, body_type: str, expected_model: str | None = None, expected_make: str | None = None) -> dict | None:
+def _parse_cargurus_blade(text: str, href: str, expected_model: str | None = None, expected_make: str | None = None) -> dict | None:
     lines = [l.strip() for l in text.splitlines() if l.strip()]
 
     id_m = re.search(r"/details/(\d+)", href)
@@ -424,7 +437,7 @@ def _parse_cargurus_blade(text: str, href: str, body_type: str, expected_model: 
         "model": model,
         "trim": trim,
         "year": year,
-        "body_type": body_type,
+        "body_type": "suv",
         "mileage": mileage,
         "distance_miles": distance_miles,
         "price": price,
@@ -439,144 +452,24 @@ def _parse_cargurus_blade(text: str, href: str, body_type: str, expected_model: 
     }
 
 
-_BLADE_SEL = '[data-cg-ft="srp-listing-blade"],[data-cg-ft="srp-listing-blade-sponsored"]'
-_PAGE_SIZE = 24   # CarGurus shows 24 per page
-_MAX_PAGES = 6    # cap at 144 results per model
-
-
-async def _extract_blades(page) -> list[dict]:
-    return await page.evaluate(f"""() => {{
-        return Array.from(document.querySelectorAll('{_BLADE_SEL}')).map(blade => {{
-            const link = blade.closest('a') || blade.parentElement?.closest('a');
-            return {{ text: blade.innerText || '', href: link ? link.href : '' }};
-        }});
-    }}""")
-
-
-async def _scrape_cargurus_model(page, base_url: str, expected_make: str, expected_model: str) -> list[dict]:
-    """Scrape all pages for one model-specific CarGurus URL.
-
-    Uses startListing URL parameter for pagination rather than DOM selectors —
-    CarGurus migrated from <a> links to <button> elements for page navigation,
-    breaking every CSS/aria selector approach. URL construction is selector-proof.
-    """
-    listings: list[dict] = []
-    seen_ids: set[str] = set()
-    _parsed_base = urllib.parse.urlparse(base_url)
-    _base_params = urllib.parse.parse_qs(_parsed_base.query, keep_blank_values=True)
-
-    for page_num in range(_MAX_PAGES):
-        if page_num == 0:
-            url = base_url
-        else:
-            params = {**_base_params, "startListing": [str(page_num * _PAGE_SIZE)]}
-            url = urllib.parse.urlunparse(
-                _parsed_base._replace(query=urllib.parse.urlencode(params, doseq=True))
-            )
-
-        await page.goto(url, wait_until="domcontentloaded", timeout=30_000)
-        await _human_delay(page, 6000, 10000)
-        await _check_blocked(page, "cargurus")
-        # Dismiss "Only show listings in GA?" or similar location modals that block blade rendering
-        await page.evaluate("""() => {
-            const btns = Array.from(document.querySelectorAll('button'));
-            const dismiss = btns.find(b => /no,? thanks|not now|dismiss|cancel/i.test(b.innerText.trim()));
-            if (dismiss) dismiss.click();
-        }""")
-        await page.wait_for_timeout(2000)
-        await _gradual_scroll(page)
-        await page.wait_for_timeout(2000)
-
-        blades = await _extract_blades(page)
-        parsed_on_page = 0
-        for blade in blades:
-            parsed = _parse_cargurus_blade(blade["text"], blade["href"], "suv", expected_model, expected_make)
-            if parsed:
-                parsed_on_page += 1
-                if parsed["external_id"] not in seen_ids:
-                    seen_ids.add(parsed["external_id"])
-                    listings.append(parsed)
-
-        if parsed_on_page < _PAGE_SIZE or page_num == _MAX_PAGES - 1:
-            break
-
-    return listings
-
-
-async def _scrape_cargurus_async(zip_code, makes, max_price, max_mileage, min_year, condition="used",
-                                  radius=100, max_year=None, clean_history=False):
-    from tools.base_trims import get_cargurus_ids
-    cond_prefix = "n" if condition == "new" else "l"
-    cond_slug   = "New" if condition == "new" else "Used"
-    year_range  = f"&startYear={min_year}" + (f"&endYear={max_year}" if max_year else "")
-    mi_filter   = "" if condition == "new" else f"&maxMileage={max_mileage}"
-    history_filter = "&noAccidents=true&personalUseOnly=true" if clean_history else ""
-    base_params = f"zip={zip_code}&distance={radius}&maxPrice={max_price}{mi_filter}{year_range}{history_filter}"
-
-    cg_ids = get_cargurus_ids()
-    if cg_ids:
-        # pages_to_scrape: (url, make, model)
-        pages_to_scrape = [
-            (f"https://www.cargurus.com/Cars/{cond_prefix}-{cond_slug}-{make}-{model.replace(' ', '-')}-{cg_id}?{base_params}", make, model)
-            for make, model, cg_id in cg_ids
-        ]
-    else:
-        pages_to_scrape = [
-            (f"https://www.cargurus.com/Cars/l-{cond_slug}-SUV-Crossover-bg7?{base_params}", "", "suv"),
-        ]
-
-    async with Stealth().use_async(async_playwright()) as p:
-        browser, ctx = await _stealth_browser(p)
-        page = await ctx.new_page()
-        try:
-            all_listings, seen_ids = [], set()
-            source_name = "cargurus_new" if condition == "new" else "cargurus"
-            for url, exp_make, label in pages_to_scrape:
-                try:
-                    results = await _scrape_cargurus_model(page, url, exp_make, label)
-                    page_new = 0
-                    for l in results:
-                        if l["external_id"] not in seen_ids:
-                            seen_ids.add(l["external_id"])
-                            l["source"] = source_name
-                            l["condition"] = condition
-                            if condition == "new":
-                                l["mileage"] = 0
-                                l["title_status"] = "clean"
-                                l["accident_count"] = 0
-                            all_listings.append(l)
-                            page_new += 1
-                    print(f"    [cargurus/{label}] {page_new} listings")
-                except Exception as e:
-                    print(f"    [cargurus/{label}] error: {e}")
-            return all_listings
-        finally:
-            await browser.close()
-
-
 def scrape_cargurus(zip_code, makes, max_price, max_mileage, min_year, radius=100, max_year=None,
-                    clean_history=False, local: bool = True):
+                    clean_history=False, local: bool = True, vehicles=None):
     from tools.base_trims import _VEHICLES
 
-    # Keep full vehicle dicts to avoid re-looking them up inside the loop.
-    search_path_vehicles = [v for v in _VEHICLES if v.get("cargurus_search_path") and v.get("cargurus_id")]
-    legacy_makes = [v["make"] for v in _VEHICLES if not v.get("cargurus_search_path") and v.get("cargurus_id")]
+    # When a vehicle allowlist is provided, restrict scraping to those models so we
+    # don't open CarGurus pages for every model in a stage that only needs a subset.
+    if vehicles is not None:
+        vehicle_keys = {(m.lower(), mo.lower()) for m, mo in vehicles}
+        pool = [v for v in _VEHICLES if (v["make"].lower(), v["model"].lower()) in vehicle_keys]
+    else:
+        pool = _VEHICLES
 
-    all_listings: list[dict] = []
-
-    # New format: one browser session shared across all models (avoids 9× open/close overhead).
-    if search_path_vehicles:
-        all_listings.extend(_run(_scrape_cargurus_search_all_async(
-            search_path_vehicles, zip_code, min_year, max_year, radius=radius, local=local,
-        )))
-
-    # Legacy format: models without a search path
-    if legacy_makes:
-        legacy = _run(_scrape_cargurus_async(zip_code, legacy_makes, max_price, max_mileage, min_year,
-                                              radius=radius, max_year=max_year, clean_history=True))
-        all_listings.extend(legacy)
-
-    return all_listings
+    search_path_vehicles = [v for v in pool if v.get("cargurus_search_path")]
+    if not search_path_vehicles:
+        return []
+    return _run(_scrape_cargurus_search_all_async(
+        search_path_vehicles, zip_code, min_year, max_year, radius=radius, local=local,
+    ))
 
 
 # ---------------------------------------------------------------------------
@@ -611,7 +504,11 @@ async def _scrape_cargurus_search_all_async(
         model   = v["model"]
         path    = v["cargurus_search_path"]
         eff_min = max(min_year, v.get("min_year", min_year))
-        eff_max = v.get("max_year") or max_year
+        v_max = v.get("max_year")
+        if max_year is not None:
+            eff_max = min(v_max, max_year) if v_max is not None else max_year
+        else:
+            eff_max = v_max
         base = (
             f"https://www.cargurus.com/search?srpVariation=DEFAULT_SEARCH"
             f"&zip={zip_code}&distance={radius}"
@@ -651,7 +548,7 @@ async def _scrape_cargurus_search_all_async(
                     """)
                     new_on_page = 0
                     for tile in tiles:
-                        parsed = _parse_cargurus_blade(tile["text"], tile["href"], "suv", model, make)
+                        parsed = _parse_cargurus_blade(tile["text"], tile["href"], model, make)
                         if parsed and parsed["external_id"] not in seen_ids:
                             seen_ids.add(parsed["external_id"])
                             listings.append(parsed)
@@ -660,9 +557,9 @@ async def _scrape_cargurus_search_all_async(
                         page_size = len(tiles) or 1
                     if len(tiles) < page_size or new_on_page == 0 or page_num == 100:
                         break
-                print(f"    [cargurus/{model}] {len(listings)} listings")
+                print(f"    [cargurus/{model}] {len(listings)} listings", flush=True)
             except Exception as e:
-                print(f"    [cargurus/{model}] error: {e}")
+                print(f"    [cargurus/{model}] error: {e}", flush=True)
             finally:
                 await ctx.close()
 
@@ -680,38 +577,20 @@ async def _scrape_cargurus_search_all_async(
 
     return [listing for model_listings in results for listing in model_listings]
 
-async def _scrape_cargurus_search_async(search_path: str, make: str, model: str,
-                                         zip_code: str, min_year: int, max_year: int | None,
-                                         radius: int = 50000, local: bool = False) -> list[dict]:
-    """Scrape a single model using the new CarGurus search format (public training helper)."""
-    v = {"make": make, "model": model, "cargurus_search_path": search_path,
-         "min_year": min_year, "max_year": max_year}
-    return await _scrape_cargurus_search_all_async([v], zip_code, min_year, max_year,
-                                                    radius=radius, local=local)
-
-    return listings
-
-
-def scrape_cargurus_search(search_path: str, make: str, model: str, zip_code: str,
-                            min_year: int, max_year: int | None = None,
-                            radius: int = 50000, local: bool = False) -> list[dict]:
-    return _run(_scrape_cargurus_search_async(search_path, make, model, zip_code,
-                                              min_year, max_year, radius, local=local))
-
 
 # ---------------------------------------------------------------------------
 # Cars.com — vehicle-card DOM extraction
 # ---------------------------------------------------------------------------
 
 
-
 async def _scrape_carscom_async(zip_code, makes, max_price, max_mileage, min_year, radius=100,
-                                 vehicles=None, clean_history=False):
+                                 vehicles=None, clean_history=False, max_year=None):
     seen_slugs: set[str] = set()
     model_params, make_params = [], []
     make_seen: set[str] = set()
     for make, model in (vehicles or []):
-        slug = f"{make.lower()}-{model.lower().replace(' ', '_')}"
+        model_slug = re.sub(r"[^a-z0-9]+", "_", model.lower()).strip("_")
+        slug = f"{make.lower()}-{model_slug}"
         if slug not in seen_slugs:
             seen_slugs.add(slug)
             model_params.append(f"models[]={slug}")
@@ -720,12 +599,13 @@ async def _scrape_carscom_async(zip_code, makes, max_price, max_mileage, min_yea
             make_params.append(f"makes[]={make.lower()}")
 
     history_filter = "&no_accidents=true&clean_title=true&personal_use=true" if clean_history else ""
+    year_max_filter = f"&year_max={max_year}" if max_year else ""
     url = (
         f"https://www.cars.com/shopping/results/?stock_type=used"
         f"&{'&'.join(make_params)}&{'&'.join(model_params)}"
         f"&zip={zip_code}&distance={radius}"
         f"&maximum_price={max_price}&maximum_mileage={max_mileage}"
-        f"&year_min={min_year}&sort=best_match_desc{history_filter}"
+        f"&year_min={min_year}{year_max_filter}&sort=best_match_desc{history_filter}"
     )
 
     async def _fetch_cards(page):
@@ -742,7 +622,8 @@ async def _scrape_carscom_async(zip_code, makes, max_price, max_mileage, min_yea
         await page.goto(page_url, wait_until="domcontentloaded", timeout=30_000)
         await page.wait_for_timeout(8_000)
         await _check_blocked(page, "carscom")
-        prev_count = 0
+        cards: list[dict] = []
+        prev_count = -1
         for _ in range(8):
             await page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
             await page.wait_for_timeout(2_500)
@@ -750,7 +631,7 @@ async def _scrape_carscom_async(zip_code, makes, max_price, max_mileage, min_yea
             if len(cards) == prev_count:
                 break
             prev_count = len(cards)
-        return await _fetch_cards(page)
+        return cards
 
     async with Stealth().use_async(async_playwright()) as p:
         browser, ctx = await _stealth_browser(p)
@@ -775,7 +656,7 @@ async def _scrape_carscom_async(zip_code, makes, max_price, max_mileage, min_yea
                     if len(next_cards) < _CARSCOM_PAGE_SIZE:
                         break  # last page
                 except Exception as e:
-                    print(f"  [carscom] page {page_num} error: {e}")
+                    print(f"  [carscom] page {page_num} error: {e}", flush=True)
                     break
 
             listings: list[dict] = []
@@ -817,15 +698,15 @@ async def _scrape_carscom_async(zip_code, makes, max_price, max_mileage, min_yea
                         "raw": {"text": card["text"][:400], "deal_rating": deal_rating},
                     })
                 except Exception as e:
-                    print(f"  [carscom] card parse error (id={lid}): {e}")
+                    print(f"  [carscom] card parse error (id={lid}): {e}", flush=True)
                     continue
             return listings
         finally:
             await browser.close()
 
 
-def scrape_carscom(zip_code, makes, max_price, max_mileage, min_year, radius=100, vehicles=None, clean_history=False):
-    return _run(_scrape_carscom_async(zip_code, makes, max_price, max_mileage, min_year, radius=radius, vehicles=vehicles, clean_history=clean_history))
+def scrape_carscom(zip_code, makes, max_price, max_mileage, min_year, radius=100, vehicles=None, clean_history=False, max_year=None):
+    return _run(_scrape_carscom_async(zip_code, makes, max_price, max_mileage, min_year, radius=radius, vehicles=vehicles, clean_history=clean_history, max_year=max_year))
 
 
 # ---------------------------------------------------------------------------
@@ -900,37 +781,56 @@ def _parse_history(text: str) -> dict:
     }
 
 
-_ENRICH_CONCURRENCY  = 3   # parallel detail-page fetches per browser session
+_ENRICH_CONCURRENCY  = 5   # parallel detail-page fetches per browser session
 _ENRICH_TIMEOUT      = 600  # hard cap on the whole enrichment batch (10 min)
 _CARSCOM_PAGE_SIZE   = 24  # Cars.com shows 24 listings per page
 _CARSCOM_MAX_PAGES   = 25  # cap at 600 listings per run (all 9 models combined)
+
+
+_INSIGHTS_KEYWORDS = re.compile(
+    r"certif|package|price.?drop|reduced|was \$|owner|service.?record|garage|carfax|autocheck",
+    re.IGNORECASE,
+)
+
+def _focus_listing_text(text: str, limit: int = 1500) -> str:
+    """Return a focused excerpt of page innerText for LLM insight extraction.
+
+    Collapses whitespace and anchors the window on the first occurrence of
+    insights-relevant keywords (CPO, packages, price drop, owner history).
+    Falls back to the first `limit` chars when no keyword is found.
+    """
+    # Collapse runs of whitespace to a single space / newline
+    text = re.sub(r"[ \t]+", " ", text)
+    text = re.sub(r"\n{3,}", "\n\n", text)
+    m = _INSIGHTS_KEYWORDS.search(text)
+    if m:
+        start = max(0, m.start() - 200)
+        return text[start : start + limit]
+    return text[:limit]
 
 
 def _extract_insights_llm(text: str) -> dict:
     """Call LLM to extract qualitative insights from a listing detail page.
     Returns: {cpo, packages, price_drop, owner_notes}
     """
-    if _OpenAI is None or not os.environ.get("OPENROUTER_API_KEY"):
+    client = _get_llm_client()
+    if client is None:
         return {}
     try:
-        client = _OpenAI(
-            base_url="https://openrouter.ai/api/v1",
-            api_key=os.environ["OPENROUTER_API_KEY"],
-        )
+        excerpt = _focus_listing_text(text)
         prompt = (
-            "Extract information from this used car listing page. "
-            "Return ONLY valid JSON with these fields:\n"
-            '- "cpo": true/false (is it explicitly Certified Pre-Owned or CPO?)\n'
-            '- "packages": array of option package names mentioned (e.g. ["Premium Package", "M Sport Package"]). Empty array if none.\n'
-            '- "price_drop": integer dollars if a price reduction is mentioned, else null\n'
-            '- "owner_notes": one short string if notable owner/condition info (e.g. "1-owner, all service records"), else null\n'
-            "Only include what is explicitly stated. Do not infer.\n\n"
-            f"Listing text:\n{text[:3000]}"
+            'Return JSON only: {"cpo":bool,"packages":[str],"price_drop":int|null,"owner_notes":str|null}\n'
+            "cpo=true only if explicitly CPO/Certified Pre-Owned. "
+            "packages=named option packages (empty array if none). "
+            "price_drop=dollar reduction if stated. "
+            "owner_notes=short string for notable condition/history (null if none). "
+            "Only explicit facts, no inference.\n\n"
+            f"{excerpt}"
         )
         resp = client.chat.completions.create(
             model="deepseek/deepseek-v4-flash",
             messages=[{"role": "user", "content": prompt}],
-            max_tokens=200,
+            max_tokens=120,
             timeout=15,
             response_format={"type": "json_object"},
         )
@@ -943,7 +843,7 @@ def _extract_insights_llm(text: str) -> dict:
             "owner_notes": str(data["owner_notes"])[:80] if data.get("owner_notes") else None,
         }
     except Exception as e:
-        print(f"    [insights] LLM extraction failed: {e}")
+        print(f"    [insights] LLM extraction failed: {e}", flush=True)
         return {}
 
 
@@ -970,9 +870,10 @@ async def _enrich_detail_async(pairs: list[tuple[str, str]], results: dict) -> N
                 print(f"    [{ext_id}] accidents={data['accident_count']} "
                       f"title={data['title_status']} owners={data['owner_count']} "
                       f"mileage={data['mileage']}"
-                      + (f" cpo={insights.get('cpo')} pkgs={len(insights.get('packages',[]))}" if insights else ""))
+                      + (f" cpo={insights.get('cpo')} pkgs={len(insights.get('packages',[]))}" if insights else ""),
+                      flush=True)
             except Exception as e:
-                print(f"    [{ext_id}] detail fetch error: {e}")
+                print(f"    [{ext_id}] detail fetch error: {e}", flush=True)
             finally:
                 await page.close()
 
@@ -997,7 +898,7 @@ def enrich_listings_from_detail(listings: list[dict]) -> list[dict]:
         asyncio.run(asyncio.wait_for(_enrich_detail_async(pairs, enriched), timeout=_ENRICH_TIMEOUT))
     except asyncio.TimeoutError:
         print(f"  [enrich] session timed out after {_ENRICH_TIMEOUT}s "
-              f"— {len(enriched)}/{len(pairs)} fetched, using partial results")
+              f"— {len(enriched)}/{len(pairs)} fetched, using partial results", flush=True)
     for listing in listings:
         data = enriched.get(str(listing["external_id"]), {})
         if data.get("accident_count") is not None:

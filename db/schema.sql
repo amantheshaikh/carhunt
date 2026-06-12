@@ -10,6 +10,7 @@ CREATE TABLE IF NOT EXISTS listings (
   trim TEXT,
   year INT NOT NULL,
   body_type TEXT,                        -- 'sedan' | 'suv' | 'crossover'
+  drivetrain TEXT,
   mileage INT,
   price INT NOT NULL,
   dealer_name TEXT,
@@ -39,18 +40,11 @@ CREATE TABLE IF NOT EXISTS listing_scores (
   age_score NUMERIC,
   reliability_score NUMERIC,
   paperwork_score NUMERIC,
-  market_median_price INT,                   -- stores MSRP (new car anchor price)
-  market_price_source TEXT,                  -- 'new_listings' | 'kbb' | 'estimated' | null
+  fair_price          INT,                   -- ML-predicted fair price
+  market_price_source TEXT,                  -- 'ml_model'
   monthly_payment NUMERIC,
+  shap_values JSONB,
   scored_at TIMESTAMPTZ NOT NULL DEFAULT now()
-);
-
-CREATE TABLE IF NOT EXISTS contact_log (
-  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  listing_id UUID NOT NULL REFERENCES listings(id) ON DELETE CASCADE,
-  contacted_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-  channel TEXT NOT NULL DEFAULT 'contact_form',  -- 'contact_form' | 'phone' | 'other'
-  note TEXT
 );
 
 CREATE TABLE IF NOT EXISTS watchlist (
@@ -123,6 +117,7 @@ CREATE TABLE IF NOT EXISTS refresh_log (
   source_errors JSONB
 );
 
+
 -- Insert default settings row if not exists
 INSERT INTO user_settings (id) VALUES (gen_random_uuid())
 ON CONFLICT DO NOTHING;
@@ -130,12 +125,13 @@ ON CONFLICT DO NOTHING;
 -- Migrations for existing databases
 ALTER TABLE listings ADD COLUMN IF NOT EXISTS condition TEXT NOT NULL DEFAULT 'used';
 ALTER TABLE listing_scores ADD COLUMN IF NOT EXISTS market_price_source TEXT;
+ALTER TABLE listing_scores ADD COLUMN IF NOT EXISTS shap_values JSONB;
 CREATE INDEX IF NOT EXISTS idx_listings_condition ON listings(condition);
+ALTER TABLE price_training_data ADD COLUMN IF NOT EXISTS cpo BOOLEAN DEFAULT false;
 
 -- Indexes for common query patterns
 CREATE INDEX IF NOT EXISTS idx_listings_status ON listings(status);
 CREATE INDEX IF NOT EXISTS idx_listings_source ON listings(source);
 CREATE INDEX IF NOT EXISTS idx_listings_first_seen ON listings(first_seen_at);
 CREATE INDEX IF NOT EXISTS idx_listings_snoozed ON listings(snoozed_until) WHERE snoozed_until IS NOT NULL;
-CREATE INDEX IF NOT EXISTS idx_contact_log_listing ON contact_log(listing_id);
 CREATE INDEX IF NOT EXISTS idx_watchlist_listing ON watchlist(listing_id);

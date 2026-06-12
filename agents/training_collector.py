@@ -10,33 +10,29 @@ CarMax and Carvana screen their own inventory so no enrichment is needed.
 Run:
   python3 training_collector.py           # standard (2025-2026, ≤$55k)
   python3 training_collector.py --broad   # extended (2023-2026, no price cap, more stages)
-Re-runnable — ON CONFLICT DO NOTHING prevents duplicates.
+Re-runnable — ON CONFLICT updates trim/drivetrain/powertrain so fixes to canonical_trim propagate.
 """
 import os
 import sys
+import time
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeout
 from datetime import datetime
 from dotenv import load_dotenv
 
 load_dotenv(os.path.join(os.path.dirname(__file__), "..", ".env.local"))
 
-from tools.db import execute, fetch_one, refresh_self_computed_medians
-from tools.base_trims import get_allowed_makes, get_allowed_models, get_vehicles, _norm, is_trim_allowed, canonical_trim, get_model_min_year, get_model_max_year
-from tools.scoring import detect_powertrain
-from tools.scrapers import scrape_cargurus, scrape_carvana, scrape_carscom, scrape_carmax, scrape_cargurus_search
-from tools.base_trims import _VEHICLES as _ALL_VEHICLES
+# Force line-buffered stdout so output appears immediately when piped to tee/files
+sys.stdout.reconfigure(line_buffering=True)
 
-# Vehicles with targeted CarGurus search paths (trim-level + full history filters)
-_CARGURUS_SEARCH_PATHS = {
-    (v["make"].lower(), v["model"].lower()): {
-        "path": v["cargurus_search_path"],
-        "min_year": v.get("min_year", 2020),
-        "max_year": v.get("max_year"),
-    }
-    for v in _ALL_VEHICLES if v.get("cargurus_search_path")
-}
+from tools.log_tee import enable_log_tee
+from tools.db import execute, fetch_one, refresh_self_computed_medians
+from tools.base_trims import get_allowed_makes, get_allowed_models, get_vehicles, _norm, is_trim_allowed, is_trim_allowed_for_training, canonical_trim, get_model_min_year, get_model_max_year, split_xc60_model, split_cx50_model
+from tools.scoring import detect_powertrain, detect_drivetrain
+from tools.price_model import _drivetrain_for
+from tools.scrapers import scrape_cargurus, scrape_carvana, scrape_carscom, scrape_carmax
 from tools.dealer_scraper import scrape_all_dealers
 from tools.job_tracker import start_job, update_job, complete_job
-from tools.price_model import _PLATFORM_MIN_YEAR
+from tools.price_model import _PLATFORM_MIN_YEAR, _is_cpo
 
 ZIP         = "30328"   # anchor zip (CarGurus requires one; 2500 mi = continental US)
 RADIUS      = 2500      # nationwide
@@ -94,7 +90,7 @@ def _is_clean(listing: dict, source: str) -> bool:
     return True
 
 
-def _insert(rows: list[dict], allowed_norm: set[str]) -> int:
+def _insert(rows: list[dict], allowed_norm: set[str], min_year: int | None = None, max_year: int | None = None) -> int:
     inserted = 0
     for l in rows:
         make  = l.get("make", "")
@@ -105,12 +101,33 @@ def _insert(rows: list[dict], allowed_norm: set[str]) -> int:
         source = l.get("source", "cargurus")
         if not all([make, model, year, price]):
             continue
-        if price < 20000:
-            continue  # exclude lemon/salvage/fleet-priced cars
-        if miles and year and (miles / (_CURR_YEAR - int(year) + 1)) > 14000:
-            continue  # >14k miles/year likely rental/fleet usage
+        # Check allowlist — treat "xc60recharge" as "xc60", and "cx50" as "cx50hybrid" since they share pages
+        check_norm = _norm(model)
+        if check_norm == "xc60recharge":
+            check_norm = "xc60"
+        elif check_norm == "cx50":
+            check_norm = "cx50hybrid"
+
+        if check_norm not in allowed_norm:
+            continue
+
+        raw_text = (l.get("raw") or {}).get("text") if isinstance(l.get("raw"), dict) else None
+        # Split models using shared helpers
+        model = split_xc60_model(make, model, l.get("trim"))
+        model = split_cx50_model(make, model, l.get("trim"), raw_text)
+
+        # Re-check allowlist after the split to filter out non-recharge XC60 or gas CX-50
         if _norm(model) not in allowed_norm:
             continue
+        if min_year and int(year) < min_year:
+            continue
+        if max_year and int(year) > max_year:
+            continue
+        if price < 20000:
+            continue  # exclude lemon/salvage/fleet-priced cars
+        years_old = _CURR_YEAR - int(year) + 1
+        if miles and year and years_old > 0 and (miles / years_old) > 14000:
+            continue  # >14k miles/year likely rental/fleet usage
         # Enforce year range: use the stricter of platform min and cars.json target min
         platform_min = _PLATFORM_MIN_YEAR.get(_norm(model), 0)
         target_min   = get_model_min_year(make, model) or 0
@@ -121,25 +138,36 @@ def _insert(rows: list[dict], allowed_norm: set[str]) -> int:
         target_max = get_model_max_year(make, model)
         if target_max and int(year) > target_max:
             continue
-        # Detect powertrain from original trim before canonicalization strips model-specific prefixes
-        # (e.g. "Recharge T8 Plus Dark Theme eAWD" → powertrain=phev, trim="Plus")
+        # Detect powertrain and drivetrain from original trim before canonicalization strips
+        # model-specific prefixes (e.g. "Recharge T8 Plus Dark Theme eAWD" → phev/awd, trim="Plus")
         raw_trim = l.get("trim")
-        powertrain = detect_powertrain(raw_trim, model, (l.get("raw") or {}).get("text") if isinstance(l.get("raw"), dict) else None)
-        # Enforce trim allowlist — reject M35i, M40i, M50 etc. that skew fair-value model
-        trim = canonical_trim(make, model, raw_trim)
-        if not is_trim_allowed(make, model, trim):
+        powertrain = detect_powertrain(raw_trim, model, raw_text)
+        # Use _drivetrain_for so _DRIVETRAIN_DEFAULTS model-year overrides apply at insert time
+        # (e.g. 2024+ XC40 → always AWD even when canonical trim "Plus" has no AWD keyword).
+        drivetrain = _drivetrain_for({"make": make, "model": model, "year": year}, raw_trim, model.lower(), raw_text)
+        # Validate raw trim against allowlist first (same order as sourcing_agent.py),
+        # then canonicalize — avoids accepting a trim only because canonical_trim mangled it.
+        if not is_trim_allowed_for_training(make, model, raw_trim, source=source):
             continue
+        trim = canonical_trim(make, model, raw_trim)
         if not _is_clean(l, source):
             continue  # accident or bad title — same gates as active listings
+        cpo = _is_cpo(l)
         try:
             execute(
                 """INSERT INTO price_training_data
-                   (make, model, year, mileage, price, condition, trim, source, listing_url, powertrain)
-                   VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
-                   ON CONFLICT (source, make, model, year, mileage, price) DO NOTHING""",
+                   (make, model, year, mileage, price, condition, trim, source, listing_url, powertrain, drivetrain, cpo)
+                   VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                   ON CONFLICT (source, listing_url)
+                   DO UPDATE SET drivetrain = EXCLUDED.drivetrain,
+                                 powertrain = EXCLUDED.powertrain,
+                                 trim       = EXCLUDED.trim,
+                                 price      = EXCLUDED.price,
+                                 mileage    = EXCLUDED.mileage,
+                                 cpo        = EXCLUDED.cpo""",
                 (make, model, year, miles, price,
                  l.get("condition", "used"), trim, source,
-                 l.get("listing_url") or l.get("url"), powertrain),
+                 l.get("listing_url") or l.get("url"), powertrain, drivetrain, cpo),
             )
             inserted += 1
         except Exception:
@@ -147,70 +175,156 @@ def _insert(rows: list[dict], allowed_norm: set[str]) -> int:
     return inserted
 
 
-def run_stage(desc, min_year, max_mileage, max_price, makes, allowed_norm, vehicles) -> int:
-    total = 0
+_SCRAPER_TIMEOUT = 900  # seconds per scraper before giving up (15 min covers all-model CarGurus runs)
+
+
+def _ts() -> str:
+    return datetime.now().strftime("%H:%M:%S")
+
+
+_CPO_SOURCES       = {"carvana", "carmax"}   # inventory focused on CPO/newer cars
+_HIGH_MILEAGE_SKIP = 40_000                  # skip CPO sources above this mileage cap
+
+
+def run_stage(desc, min_year, max_mileage, max_price, makes, allowed_norm, vehicles,
+              cg_scraped: set | None = None, max_year: int | None = None) -> int:
+    """Run all four scrapers for one stage group.
+
+    cg_scraped (optional) — mutable set of (eff_min, frozenset(vehicles)) keys for
+    CarGurus dedup across stages. CarGurus URL has no mileage/price filter so
+    re-running it for the same year+model group fetches identical data.
+    When provided, CarGurus is skipped if this group was already scraped.
+    """
+    eff_max = max_year if max_year is not None else MAX_YEAR
     scrapers = [
-        # CarGurus: new search format for search-path models (local=False = nationwide, no GA filter)
-        (scrape_cargurus, "cargurus", {"radius": RADIUS, "max_year": MAX_YEAR, "clean_history": True, "local": False}),
-        (scrape_carscom,  "carscom",  {"radius": RADIUS, "vehicles": vehicles, "clean_history": True}),
-        (scrape_carvana,  "carvana",  {"vehicles": vehicles}),
-        (scrape_carmax,   "carmax",   {"radius": RADIUS, "vehicles": vehicles}),
+        ("cargurus", scrape_cargurus, {"radius": RADIUS, "max_year": eff_max, "clean_history": True, "local": False, "vehicles": vehicles}),
+        ("carscom",  scrape_carscom,  {"radius": RADIUS, "vehicles": vehicles, "clean_history": True, "max_year": eff_max}),
+        ("carvana",  scrape_carvana,  {"vehicles": vehicles, "max_year": eff_max}),
+        ("carmax",   scrape_carmax,   {"radius": RADIUS, "vehicles": vehicles, "max_year": eff_max}),
     ]
-    for fn, label, kwargs in scrapers:
+    total = 0
+    cg_key = (min_year, frozenset(vehicles)) if cg_scraped is not None else None
+
+    for label, fn, kwargs in scrapers:
+        # CarGurus dedup: same (eff_min, vehicles) group produces identical URLs across stages
+        if label == "cargurus" and cg_scraped is not None:
+            if cg_key in cg_scraped:
+                print(f"    [{_ts()}] cargurus: skipped (same year/model group already scraped)", flush=True)
+                continue
+            cg_scraped.add(cg_key)
+
+        # CPO sources (Carvana/CarMax) rarely have high-mileage cars — skip to save time
+        if label in _CPO_SOURCES and max_mileage > _HIGH_MILEAGE_SKIP:
+            print(f"    [{_ts()}] {label}: skipped (max_mileage={max_mileage:,} > {_HIGH_MILEAGE_SKIP:,}, CPO source)", flush=True)
+            continue
+
+        print(f"    [{_ts()}] {label}: starting...", flush=True)
+        t0 = time.time()
         try:
-            rows = fn(ZIP, makes, max_price, max_mileage, min_year, **kwargs)
-            n = _insert(rows, allowed_norm)
+            with ThreadPoolExecutor(max_workers=1) as ex:
+                future = ex.submit(fn, ZIP, makes, max_price, max_mileage, min_year, **kwargs)
+                rows = future.result(timeout=_SCRAPER_TIMEOUT)
+            n = _insert(rows, allowed_norm, min_year=min_year, max_year=eff_max)
             total += n
-            print(f"    {label}: {len(rows)} scraped → {n} new rows")
+            elapsed = time.time() - t0
+            print(f"    [{_ts()}] {label}: {len(rows)} scraped → {n} new rows  ({elapsed:.0f}s)", flush=True)
+        except FuturesTimeout:
+            elapsed = time.time() - t0
+            print(f"    [{_ts()}] {label}: TIMEOUT after {elapsed:.0f}s — skipping", flush=True)
         except Exception as e:
-            print(f"    {label}: ERROR — {e}")
+            elapsed = time.time() - t0
+            print(f"    [{_ts()}] {label}: ERROR after {elapsed:.0f}s — {e}", flush=True)
     return total
 
 
-def main(broad: bool = False):
-    makes        = get_allowed_makes()
-    vehicles     = get_vehicles()
-    allowed_norm = {_norm(m) for m in get_allowed_models()}
-    stages       = STAGES_BROAD if broad else STAGES
-    mode_label   = "BROAD (2023-2026, no price cap)" if broad else "standard (2025-2026)"
+def _stage_groups(all_vehicles: list[tuple[str, str]], stage_min_year: int) -> dict[int, list[tuple[str, str]]]:
+    """Group vehicles by effective min_year for a given stage.
 
-    print(f"\n{'='*62}")
-    print(f"  Market data collection — {mode_label}")
-    print(f"  zip {ZIP}, radius {RADIUS} mi (nationwide)")
-    print(f"  {len(stages)} stages  |  {len(allowed_norm)} models  |  {len(makes)} makes")
-    print(f"  Enrichment: CarGurus + Cars.com (accident/title validation)")
-    print(f"{'='*62}\n")
+    Each group gets its own scraper call with an exact min_year so we never
+    fetch listings below a model's floor. Sportage Hybrid (min=2026) always
+    gets queried with min_year=2026 even in a 2023 stage, instead of fetching
+    and discarding 3 years of useless results.
+
+    Returns {effective_min_year: [(make, model), ...]} sorted ascending.
+    Models above their max_year ceiling are excluded entirely.
+    """
+    groups: dict[int, list[tuple[str, str]]] = {}
+    for make, model in all_vehicles:
+        model_max = get_model_max_year(make, model)
+        if model_max and stage_min_year > model_max:
+            continue  # stage starts above this model's ceiling — skip
+        model_min = max(
+            get_model_min_year(make, model) or 0,
+            _PLATFORM_MIN_YEAR.get(_norm(model), 0),
+        )
+        if stage_min_year < model_min:
+            continue  # stage starts below this model's floor — skip
+        eff_min = max(stage_min_year, model_min)
+        groups.setdefault(eff_min, []).append((make, model))
+    return dict(sorted(groups.items()))
+
+
+def main(broad: bool = False):
+    enable_log_tee()  # tee all output to /tmp/carhunt-refresh.log for the dashboard SSE stream
+
+    all_vehicles     = get_vehicles()
+    all_allowed_norm = {_norm(model) for _, model in all_vehicles}
+    stages           = STAGES_BROAD if broad else STAGES
+    mode_label       = "BROAD (2023-2026, no price cap)" if broad else "standard (2025-2026)"
+
+    print(f"\n{'='*62}", flush=True)
+    print(f"  Market data collection — {mode_label}", flush=True)
+    print(f"  zip {ZIP}, radius {RADIUS} mi (nationwide)", flush=True)
+    print(f"  {len(stages)} stages  |  {len(all_vehicles)} models", flush=True)
+    print(f"  Enrichment: CarGurus + Cars.com (accident/title validation)", flush=True)
+    print(f"{'='*62}\n", flush=True)
 
     before      = int(fetch_one("SELECT count(*) AS n FROM price_training_data")["n"])
     grand_total = 0
     job_id      = start_job("retrain", stage_total=len(stages))
+    # CarGurus dedup set: tracks (eff_min, frozenset(vehicles)) already scraped.
+    # CarGurus URL has no mileage/price params, so repeated stage calls for the same
+    # year+model group return identical listings — pure wasted time.
+    cg_scraped: set[tuple] = set()
 
     try:
         for i, (desc, min_year, max_mileage, max_price) in enumerate(stages, 1):
+            groups = _stage_groups(all_vehicles, min_year)
+            if not groups:
+                print(f"[{i:02d}/{len(stages)}] {desc}  — skipped (no models in range)\n", flush=True)
+                continue
             price_label = "no cap" if max_price >= 999_999 else f"${max_price:,}"
-            print(f"[{i:02d}/{len(stages)}] {desc}  "
-                  f"(yr>={min_year}, mi<={max_mileage:,}, price<={price_label})")
+            print(f"[{i:02d}/{len(stages)}] {desc}  (mi<={max_mileage:,}, price<={price_label})", flush=True)
             update_job(job_id, stage_current=i, stage_label=desc, rows_added=grand_total)
-            n = run_stage(desc, min_year, max_mileage, max_price, makes, allowed_norm, vehicles)
-            grand_total += n
+            stage_total_rows = 0
+            for eff_min, group_vehicles in groups.items():
+                makes        = list({make for make, _ in group_vehicles})
+                allowed_norm = {_norm(model) for _, model in group_vehicles}
+                model_names  = ", ".join(model for _, model in group_vehicles)
+                print(f"  [yr>={eff_min}] {model_names}", flush=True)
+                n = run_stage(desc, eff_min, max_mileage, max_price, makes, allowed_norm, group_vehicles,
+                              cg_scraped=cg_scraped)
+                stage_total_rows += n
+            grand_total += stage_total_rows
 
             if i % 3 == 0:
                 cur = int(fetch_one("SELECT count(*) AS n FROM price_training_data")["n"])
-                print(f"  ↳ running total: {cur} rows\n")
+                print(f"  ↳ running total: {cur} rows\n", flush=True)
             else:
-                print()
+                print(flush=True)
 
-        print("Scraping dealer sites...")
+        print("Scraping dealer sites...", flush=True)
         update_job(job_id, stage_current=len(stages), stage_label="Dealer scrape", rows_added=grand_total)
         try:
-            dealer_rows = scrape_all_dealers(force=True)
-            n = _insert(dealer_rows, allowed_norm)
+            all_makes = list({make for make, _ in all_vehicles})
+            dealer_rows = scrape_all_dealers(makes=all_makes, force=True, update_cooldown=False)
+            n = _insert(dealer_rows, all_allowed_norm)
             grand_total += n
-            print(f"    dealers: {len(dealer_rows)} scraped → {n} new rows\n")
+            print(f"    dealers: {len(dealer_rows)} scraped → {n} new rows\n", flush=True)
         except Exception as e:
-            print(f"    dealers: ERROR — {e}\n")
+            print(f"    dealers: ERROR — {e}\n", flush=True)
 
-        print("Recomputing market price medians...")
+        print("Recomputing market price medians...", flush=True)
         update_job(job_id, stage_current=len(stages), stage_label="Recomputing medians", rows_added=grand_total)
         cached = refresh_self_computed_medians()
 
@@ -219,12 +333,12 @@ def main(broad: bool = False):
     except Exception:
         complete_job(job_id, status="error")
         raise
-    print(f"\n{'='*62}")
-    print(f"  Done.")
-    print(f"  New rows collected : {grand_total}")
-    print(f"  Total training rows: {after}  (was {before})")
-    print(f"  Cache entries      : {cached} make/model/year/bucket combos")
-    print(f"{'='*62}\n")
+    print(f"\n{'='*62}", flush=True)
+    print(f"  Done.", flush=True)
+    print(f"  New rows collected : {grand_total}", flush=True)
+    print(f"  Total training rows: {after}  (was {before})", flush=True)
+    print(f"  Cache entries      : {cached} make/model/year/bucket combos", flush=True)
+    print(f"{'='*62}\n", flush=True)
 
 
 if __name__ == "__main__":

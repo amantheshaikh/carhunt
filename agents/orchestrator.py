@@ -22,6 +22,9 @@ sys.stdout.reconfigure(line_buffering=True)
 
 load_dotenv(os.path.join(os.path.dirname(__file__), "..", ".env.local"))
 
+from tools.log_tee import enable_log_tee
+enable_log_tee()  # tee all output to /tmp/carhunt-refresh.log for the dashboard SSE stream
+
 from tools.db import execute_returning, execute, refresh_self_computed_medians
 from tools.job_tracker import start_job, update_job, complete_job
 import sourcing_agent
@@ -30,11 +33,15 @@ import analysis_agent
 
 def _generate_summary(source_results: dict, source_errors: dict, scored: int, duration_s: float) -> str | None:
     """Call OpenRouter to produce a 2-3 sentence plain-English refresh summary."""
+    api_key = os.environ.get("OPENROUTER_API_KEY")
+    if not api_key:
+        print("  Summary generation skipped: OPENROUTER_API_KEY is not configured.", flush=True)
+        return None
     try:
         from openai import OpenAI
         client = OpenAI(
             base_url="https://openrouter.ai/api/v1",
-            api_key=os.environ["OPENROUTER_API_KEY"],
+            api_key=api_key,
         )
         sources_text = ", ".join(
             f"{src} ({n} listings)" for src, n in sorted(source_results.items())
@@ -54,19 +61,23 @@ def _generate_summary(source_results: dict, source_errors: dict, scored: int, du
         resp = client.chat.completions.create(
             model="deepseek/deepseek-v4-flash",
             messages=[{"role": "user", "content": prompt}],
-            max_tokens=150,
+            max_tokens=80,
         )
         return resp.choices[0].message.content.strip()
     except Exception as e:
-        print(f"  Summary generation skipped: {e}", flush=True)
+        print(f"  Summary generation failed: {e}", flush=True)
         return None
+
+
+watchdog_event = threading.Event()
 
 
 def _start_watchdog(run_id: str) -> threading.Thread:
     """Daemon thread that force-kills the process after TIMEOUT_SECONDS.
     signal.SIGALRM is unreliable with asyncio on macOS — this always fires."""
     def _kill():
-        time.sleep(TIMEOUT_SECONDS)
+        if watchdog_event.wait(TIMEOUT_SECONDS):
+            return  # Event set; refresh completed successfully
         print(f"[TIMEOUT] Refresh exceeded {TIMEOUT_SECONDS}s — force terminating", file=sys.stderr, flush=True)
         try:
             execute(
@@ -92,7 +103,9 @@ def _run_phase(fn, timeout_s: int, label: str):
         print(f"  [{label}] timed out after {timeout_s}s — skipping", flush=True)
         return None
     except Exception as e:
+        import traceback
         print(f"  [{label}] failed: {e}", flush=True)
+        traceback.print_exc()
         return None
     finally:
         executor.shutdown(wait=False)
@@ -106,7 +119,7 @@ def _kill_stale_browsers() -> None:
     )
 
 
-def run():
+def run(force: bool = False):
     _kill_stale_browsers()
     start_time = time.time()
     print(f"[{datetime.now().isoformat()}] Starting refresh...", flush=True)
@@ -116,6 +129,9 @@ def run():
         "INSERT INTO refresh_log (started_at) VALUES (now()) RETURNING id",
     )
     run_id = str(log["id"])
+    
+    # Reset watchdog event and start watchdog
+    watchdog_event.clear()
     _start_watchdog(run_id)
 
     job_id = start_job("refresh", stage_total=4)
@@ -124,7 +140,7 @@ def run():
         print("Running Sourcing Agent...", flush=True)
         update_job(job_id, stage_current=1, stage_label="Sourcing listings")
         t0 = time.time()
-        sourcing_result = sourcing_agent.run(run_id)
+        sourcing_result = sourcing_agent.run(run_id, force=force)
         print(f"Sourcing complete in {time.time()-t0:.0f}s", flush=True)
         source_results = sourcing_result.get("source_results", {})
         source_errors = sourcing_result.get("source_errors", {})
@@ -195,7 +211,12 @@ def run():
         complete_job(job_id, status="error")
         print(f"ERROR: {e}", file=sys.stderr)
         raise
+    finally:
+        # Signal watchdog thread to exit cleanly and kill any stale browser instances
+        watchdog_event.set()
+        _kill_stale_browsers()
 
 
 if __name__ == "__main__":
-    run()
+    force = "--force" in sys.argv
+    run(force=force)
