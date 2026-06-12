@@ -368,7 +368,7 @@ def _parse_cargurus_blade(text: str, href: str, expected_model: str | None = Non
     if expected_model:
         # If the page is a Hybrid model but the listing text doesn't say Hybrid,
         # this is a sponsored cross-variant listing — reject it.
-        if "hybrid" in expected_model.lower() and "hybrid" not in name_line.lower():
+        if "hybrid" in expected_model.lower() and "hybrid" not in name_line.lower() and "hybrid" not in text.lower():
             return None
         model = expected_model
         em = expected_model.strip()

@@ -1,6 +1,6 @@
 # CarHunt
 
-A personal used-car deal tracker for the Atlanta metro area. Scrapes CarGurus, Cars.com, CarMax, Carvana, and local dealer websites for target vehicle configurations, scores each listing using a Gradient Boosting ML model, and surfaces the best deals in a Next.js dashboard.
+A personal used-car deal tracker for the Atlanta metro area. Scrapes CarGurus, Cars.com, CarMax, Carvana, and local dealer websites for target vehicle configurations, scores each listing using a stacked ensemble ML model (GB + KNN + Ridge), and surfaces the best deals in a Next.js dashboard.
 
 ---
 
@@ -15,7 +15,7 @@ carhunt/
 ├── agents/                   # Python scraping + ML pipeline
 │   ├── orchestrator.py       # Entry point: Sourcing → Price cache → Retrain → Score
 │   ├── sourcing_agent.py     # Scrapes all sources, diffs against DB, enriches new listings
-│   ├── analysis_agent.py     # Scores listings with GB model → listing_scores
+│   ├── analysis_agent.py     # Scores listings with stacked ensemble → listing_scores
 │   ├── query_agent.py        # Natural-language query CLI (spawned by /api/query)
 │   ├── training_collector.py # Collects broad market data for ML training
 │   ├── backfill_training.py  # Targeted fix/rescrape of price_training_data for one model
@@ -25,7 +25,7 @@ carhunt/
 │       ├── dealer_scraper.py # Playwright inventory scraper for dealer websites
 │       ├── db.py             # psycopg2 helpers + refresh_self_computed_medians()
 │       ├── scoring.py        # score_listing() + detect_drivetrain/powertrain
-│       ├── price_model.py    # HistGradientBoostingRegressor fair-price estimator
+│       ├── price_model.py    # Stacked ensemble fair-price estimator (GB + KNN + Ridge)
 │       ├── base_trims.py     # Vehicle config loader, canonical_trim, LLM trim fallback
 │       ├── log_tee.py        # Shared stdout/stderr tee → /tmp/carhunt-refresh.log
 │       └── job_tracker.py    # Job progress tracking for dashboard SSE stream
@@ -38,15 +38,18 @@ carhunt/
 | Make | Model | CarGurus ID | Allowed Trims | Year Constraints |
 |---|---|---|---|---|
 | Hyundai | Tucson Hybrid | d3141 | SEL Convenience, N Line (≤2025), Limited | 2025–2026 |
-| Kia | Sportage Hybrid | d3239 | EX, X-Line, SX Prestige | 2026 only |
-| Volkswagen | Tiguan | d1104 | SEL R-Line, SE R-Line Black | 2025–2026 |
+| Genesis | GV70 | d3163 | Advanced, Advanced Plus, Sport Prestige (2.5T only) | 2023–2025 |
+| Kia | Sportage Hybrid | d3239 | EX, X-Line, SX Prestige | 2023+ |
+| Kia | Sportage PHEV | d3244 | EX, EX Premium, X-Line, X-Line Prestige, SX | 2023–2025 |
+| Volkswagen | Tiguan | d1104 | SE, SEL R-Line, SE R-Line Black | 2025–2026 |
 | Buick | Envision | d2398 | Preferred, Sport Touring, Avenir | 2024–2025 |
 | BMW | X1 | d2160 | xDrive28i (always AWD) | 2023–2025 |
 | BMW | X3 | d392 | sDrive30i (≤2024), xDrive30i | 2023–2025 |
+| Cadillac | XT4 | d2673 | Luxury, Premium Luxury, Sport | 2024–2025 |
 | Lexus | NX 350h | d2294 | Premium, Luxury, F SPORT | 2022–2024 |
 | Volvo | XC40 | d2624 | Plus, Ultimate (B4 FWD or B5 AWD) | 2023–2025 |
 | Volvo | XC60 | d1629 | Plus, Ultimate (B5 gas or Recharge T8 PHEV) | 2023–2025 |
-| Mazda | CX-50 Hybrid | d3170 | Preferred, Premium, Premium Plus | 2024+ |
+| Mazda | CX-50 Hybrid | d3215 | Preferred, Premium, Premium Plus | 2024+ |
 
 **Search params** (stored in `user_settings` DB table):
 - Zip: 30328 · Radius: 100 mi · Max price: $45k · Years: 2025–2026
@@ -54,7 +57,7 @@ carhunt/
 
 **CarGurus IDs** are model-specific page identifiers. The new search format uses `cargurus_search_path` (make/model/trim paths encoded as `m{makeId}/d{modelId}/trimName`).
 
-**Make IDs:** Hyundai=m28, Kia=m33, VW=m55, Buick=m21, BMW=m3, Lexus=m37, Volvo=m56, Mazda=m42
+**Make IDs:** Hyundai=m28, Genesis=m203, Kia=m33, VW=m55, Buick=m21, BMW=m3, Cadillac=m22, Lexus=m37, Volvo=m56, Mazda=m42
 
 **Notes:**
 - BMW X1 2023–2025: xDrive28i only (always AWD). sDrive28i and M35i excluded.
@@ -62,12 +65,15 @@ carhunt/
 - Lexus NX 350h 2022–2024: always AWD. Trim allowlist filters out NX 450h+ variants.
 - Volvo XC40: B4 = FWD, B5 = AWD (detected from trim text). No Recharge electric.
 - Volvo XC60: includes both B5 gas/MHEV (AWD) and Recharge T8 PHEV (eAWD). Stored as separate model names `"XC60"` and `"XC60 Recharge"` in the DB. `detect_powertrain` uses "recharge" keyword to classify PHEV.
-- Mazda CX-50 Hybrid: `engine_filter: ["Hybrid"]` — explicitly requires "Hybrid" in trim to exclude gas CX-50.
+- Genesis GV70: `engine_filter: ["2.5T"]` — shares a CarGurus page with the 3.5T; filter requires "2.5T" in trim. Training trims include Standard/Select for broader depreciation curve.
+- Kia Sportage PHEV: separate model from Sportage Hybrid — different CarGurus ID (d3244), different trim set. Always AWD.
+- Cadillac XT4: sourcing target for 2024–2025 Luxury/Premium Luxury/Sport. Both FWD and AWD variants.
+- Mazda CX-50 Hybrid: `engine_filter: ["Hybrid"]` — bypassed for Cars.com (slug `mazda-cx_50_hybrid` already scopes to hybrid); applied for all other sources.
 - Year range in `user_settings` is the global floor; per-model `min_year`/`max_year` in cars.json take precedence.
 
 **Adding a new vehicle:**
-1. Add entry to `cars.json` with `make`, `model`, `cargurus_id`, `cargurus_search_path`, `trims`, `min_year`, optional `max_year`
-2. Add trim levels to `_TRIM_LEVELS` in `price_model.py`
+1. Add entry to `cars.json` with `make`, `model`, `cargurus_id`, `cargurus_search_path`, `trims`, `min_year`, optional `max_year`, `msrp` table (used as trim_premium feature)
+2. Add trim level ordinals to `_TRIM_LEVELS` in `price_model.py` (used as fallback when MSRP lookup fails)
 3. Add platform min year to `_PLATFORM_MIN_YEAR`
 4. Add AWD override to `_DRIVETRAIN_DEFAULTS` if always AWD
 5. Add to `_TRIM_DRIVETRAIN` if a specific trim has a known drivetrain
@@ -81,7 +87,7 @@ carhunt/
 **Orchestrator phases (4 stages):**
 1. **Sourcing** (`sourcing_agent.py`) — 3-pass ingestion per source
 2. **Price cache refresh** — `refresh_self_computed_medians()` rebuilds `market_price_cache`
-3. **Model retrain** — retrains the GB price model from `price_training_data`
+3. **Model retrain** — retrains the stacked ensemble (GB + KNN + Ridge) from `price_training_data`
 4. **Scoring** (`analysis_agent.py`) — scores all unscored listings → `listing_scores`
 
 **3-pass ingestion:**
@@ -243,9 +249,9 @@ Type `/retrain` in Claude Code to run a broad market sweep and retrain the model
 | File | When to change |
 |---|---|
 | `agents/cars.json` | Add/remove models, change trims, update CarGurus IDs or search paths |
-| `agents/tools/scoring.py` | Adjust sigmoid steepness (currently 25×), drivetrain/powertrain detection keywords |
-| `agents/analysis_agent.py` | GB scoring — `listing_scores` |
-| `agents/tools/price_model.py` | GB features, trim rankings, drivetrain overrides, platform min-years |
+| `agents/tools/scoring.py` | Adjust sigmoid steepness (currently 11×), drivetrain/powertrain detection keywords |
+| `agents/analysis_agent.py` | Stacked ensemble scoring — `listing_scores` |
+| `agents/tools/price_model.py` | Stacked ensemble, MSRP-based trim_premium, CPO feature, drivetrain overrides, platform min-years |
 | `agents/tools/scrapers.py` | CarGurus format, pagination, anti-detection, LLM insight extraction |
 | `agents/tools/base_trims.py` | Trim normalization logic, LLM fallback, on-disk cache |
 | `agents/tools/log_tee.py` | Dashboard log file path, tee behavior |
@@ -301,8 +307,8 @@ PROXY_URL=...                   # optional: http://user:pass@host:port for resid
 
 | Table | Purpose |
 |---|---|
-| `listings` | All scraped listings (active, expired, contacted, purchased) |
-| `listing_scores` | GB model: `value_score` (0–100), `fair_price`, `shap_values`, `scored_at` |
+| `listings` | All scraped listings (active, expired, contacted, purchased); includes `user_notes TEXT` for personal notes |
+| `listing_scores` | Stacked ensemble: `value_score` (0–100), `fair_price`, `shap_values` (JSONB with per-estimator predictions), `scored_at` |
 | `market_price_cache` | Median prices per (make, model, year, mileage_bucket) |
 | `price_training_data` | Broader market data for ML training (includes `powertrain`, `drivetrain`, `cpo` columns) |
 | `dealer_sites` | Dealer URLs + `last_scraped_at` cooldown (6h) + `is_active` + `scraper_config` JSONB |
@@ -354,9 +360,13 @@ PROXY_URL=...                   # optional: http://user:pass@host:port for resid
 - **dealerinspire_algolia year filter:** Some indexes store year as a string; Algolia numeric range filters silently return 0. Year range removed from Algolia query; filtered by `_add_used` post-scrape with `int()` cast.
 - **Orchestrator timeouts:** 60-minute watchdog; 5-minute cap per training phase; 5-minute cap per scoring phase.
 - **Anti-detection:** Browser UA rotates across Chrome 134–136 (macOS + Windows). Viewport randomizes across 5 sizes. Bot-detection check after each CarGurus/Cars.com page load.
-- **`analysis_agent.py` has no LLM.** Scores all unscored listings in a single batch.
+- **`analysis_agent.py` has no LLM.** Scores all unscored listings in a single batch using the stacked ensemble.
 - **`query_agent.py`** uses LLM (deepseek/deepseek-v4-flash via OpenRouter) for natural-language questions about the listing DB. `max_tokens=500` caps runaway responses.
 - **Filter bar is client-side.** All filtering and sorting happens in-memory in Dashboard.tsx.
+- **Cars.com model slug** uses `re.sub(r"[^a-z0-9]+", "_", model.lower())` — all non-alphanumeric chars become underscores (e.g. "CX-50 Hybrid" → `mazda-cx_50_hybrid`). Old `str.replace(' ', '_')` left hyphens intact.
+- **`engine_filter` is source-aware** — bypassed for `carscom` when the model name itself contains the filter keyword (slug already scopes to the right variant). Always applied for CarGurus and Carvana/CarMax where the model page may include multiple engine variants.
+- **`user_notes`** — `TEXT` column on `listings`; editable via the detail panel textarea and `PATCH /api/listings/:id`. Auto-saves on blur.
+- **Stacked model pickle path** — per-model `StackedModel` dataclass saved as `price_model_{slug}.pkl`; global fallback stays a plain `Pipeline`. `StackedModel.__module__` is forced to `tools.price_model` at definition time to prevent `__main__` pickle namespace issues when training via CLI.
 - **Dedup within a run:** `known_urls`, `known_vins`, `known_price_fps`, `known_dealer_fps` fetched once before the source loop, shared across all sources including dealers.
 - **LLM token optimization:** All LLM calls use module-level shared OpenAI clients. Insight text pre-processed to 1500-char focused window. Output caps: insights=120, trim=30, summary=80, query=500.
 - **Postgres runs in Docker** (`docker compose up -d db`). Schema in `db/schema.sql`.

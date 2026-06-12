@@ -627,7 +627,21 @@ export default function Dashboard() {
 
     fetchListings(tab);
     fetchCounts();
-    if (selected?.id === id) setSelected(null);
+    if (selected?.id === id) {
+      if (action !== "edited") {
+        setSelected(null);
+      } else {
+        try {
+          const res = await fetch(`/api/listings/${id}`);
+          if (res.ok) {
+            const updated = await res.json();
+            setSelected(updated);
+          }
+        } catch (e) {
+          console.error("Failed to refresh edited listing:", e);
+        }
+      }
+    }
   };
 
   const isRefreshing = !!activeLog && !activeLog.completed_at;

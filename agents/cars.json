@@ -140,8 +140,8 @@
       }
     },
     {
-      "make": "Mazda", "model": "CX-50 Hybrid", "cargurus_id": "d3170",
-      "cargurus_search_path": "m42,m42/d3170",
+      "make": "Mazda", "model": "CX-50 Hybrid", "cargurus_id": "d3215",
+      "cargurus_search_path": "m42,m42/d3215,m42/d3215/Hybrid Preferred AWD,m42/d3215/Hybrid Premium AWD,m42/d3215/Hybrid Premium Plus AWD",
       "trims": ["Preferred", "Premium", "Premium Plus"],
       "engine_filter": ["Hybrid"],
       "min_year": 2024,

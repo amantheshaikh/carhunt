@@ -29,6 +29,7 @@ CREATE TABLE IF NOT EXISTS listings (
   is_pinned BOOLEAN NOT NULL DEFAULT false,
   condition TEXT NOT NULL DEFAULT 'used',    -- 'new' | 'used'
   raw JSONB,
+  user_notes TEXT,
   UNIQUE(source, external_id)
 );
 
@@ -128,6 +129,7 @@ ALTER TABLE listing_scores ADD COLUMN IF NOT EXISTS market_price_source TEXT;
 ALTER TABLE listing_scores ADD COLUMN IF NOT EXISTS shap_values JSONB;
 CREATE INDEX IF NOT EXISTS idx_listings_condition ON listings(condition);
 ALTER TABLE price_training_data ADD COLUMN IF NOT EXISTS cpo BOOLEAN DEFAULT false;
+ALTER TABLE listings ADD COLUMN IF NOT EXISTS user_notes TEXT;
 
 -- Indexes for common query patterns
 CREATE INDEX IF NOT EXISTS idx_listings_status ON listings(status);

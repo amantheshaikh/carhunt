@@ -22,7 +22,7 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ id: 
 export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
   const body = await req.json();
-  const { status, snoozed_until, is_pinned, mileage, trim, year, price, drivetrain } = body;
+  const { status, snoozed_until, is_pinned, mileage, trim, year, price, drivetrain, user_notes } = body;
 
   const updates: string[] = [];
   const values: unknown[] = [];
@@ -38,6 +38,10 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
   if (is_pinned !== undefined) {
     updates.push(`is_pinned = $${values.length + 1}`);
     values.push(is_pinned);
+  }
+  if (user_notes !== undefined) {
+    updates.push(`user_notes = $${values.length + 1}`);
+    values.push(user_notes);
   }
   // Editable listing fields — clear score after any change so it gets re-scored
   const scoreFields = ["mileage", "trim", "year", "price", "drivetrain"] as const;

@@ -19,6 +19,7 @@ Split models: vehicles in _POWERTRAIN_SPLIT also train _gas / _phev variants.
 """
 import math
 import os
+import re
 from dataclasses import dataclass
 from datetime import datetime
 
@@ -52,6 +53,17 @@ class StackedModel:
             self.ridge.predict(X),
         ])
         return base @ self.meta_weights
+
+# Override module name so that when trained via `python3 price_model.py` (which runs as __main__),
+# joblib doesn't pickle it as __main__.StackedModel, but rather tools.price_model.StackedModel.
+# This prevents AttributeError when loading the model from other entry points like orchestrator.py.
+StackedModel.__module__ = "tools.price_model"
+
+import sys
+# Make StackedModel available in __main__ so that any legacy/locally trained models
+# pickled as __main__.StackedModel can still be unpickled successfully.
+sys.modules["__main__"].StackedModel = StackedModel
+
 
 # Target year range per model (from cars.json) — used to bound training data
 _MODEL_YEAR_RANGE: dict[str, tuple[int, int | None]] = {
@@ -149,7 +161,6 @@ def _trim_premium(row: dict) -> float:
     base_msrp = min(msrp_year_table.values())
     
     # Find matching key
-    import re
     def normalize_for_msrp(t: str) -> str:
         t = t.lower().strip().replace("-", "").replace(" ", "")
         t = re.sub(r'^\d+(\.\d+)?[tTlLiIdDhH]', '', t)
@@ -372,27 +383,29 @@ def _make_ridge_pipeline() -> Pipeline:
 
 # Models where older inventory is a different vehicle platform — exclude pre-platform rows
 # so the model isn't contaminated by a fundamentally different car's depreciation curve.
+# Keys are normalized (lowercase, no spaces/hyphens) for consistent lookups across all modules.
 _PLATFORM_MIN_YEAR: dict[str, int] = {
-    "tucson hybrid":   2022,  # TNGA-K hybrid platform gen launched 2022
-    "sportage hybrid": 2023,  # NQ5 platform launched 2023
-    "sportage phev":   2023,  # PHEV also on NQ5 platform (launched 2023)
+    "tucsonhybrid":   2022,  # TNGA-K hybrid platform gen launched 2022
+    "sportagehybrid": 2023,  # NQ5 platform launched 2023
+    "sportagephev":   2023,  # PHEV also on NQ5 platform (launched 2023)
     "gv70":            2022,  # JX1 platform launched 2022 for US
     "tiguan":          2022,  # MK2 LCI refresh 2022 (new interior/features)
     "envision":        2021,  # 2nd gen launched 2021; 2020 is first gen
     "x1":              2023,  # U11 gen launched 2023; F48 (2016-2022) is a different car
     "x3":              2022,  # G01 LCI refresh 2022
     "xt4":             2024,  # target is 2024-2025 only; no earlier-gen data needed
-    "nx 350h":         2022,  # TNGA-K gen launched 2022; prior NX hybrids are different generation
+    "nx350h":         2022,  # TNGA-K gen launched 2022; prior NX hybrids are different generation
     "xc40":            2023,  # CMA platform refresh; 2022 and earlier is a different gen
     "xc60":            2023,  # SPA platform refresh for 2023+
-    "xc60 recharge":   2023,  # Recharge T8 PHEV also on SPA refresh platform
-    "cx-50 hybrid":    2024,  # CX-50 Hybrid launched 2024; no prior-gen hybrid data
+    "xc60recharge":   2023,  # Recharge T8 PHEV also on SPA refresh platform
+    "cx50hybrid":    2024,  # CX-50 Hybrid launched 2024; no prior-gen hybrid data
 }
 
 
 def load_training_data_for(model_name: str, powertrain_filter: str | None = None) -> tuple[list, list]:
     key = model_name.lower()
-    platform_min          = _PLATFORM_MIN_YEAR.get(key, 0)
+    norm_key = key.replace("-", "").replace(" ", "")
+    platform_min          = _PLATFORM_MIN_YEAR.get(norm_key, 0)
     target_min, target_max = _MODEL_YEAR_RANGE.get(key, (0, None))
     effective_min         = max(platform_min, target_min)
     # PHEVs can exceed the normal $55k cap (XC60 T8 goes to ~$60k)

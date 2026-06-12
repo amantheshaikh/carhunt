@@ -28,6 +28,7 @@ export interface Listing {
   accident_count: number | null;
   drivetrain: "fwd" | "awd" | null;
   is_pinned: boolean;
+  user_notes: string | null;
   condition: 'new' | 'used';
   insights: {
     cpo: boolean;

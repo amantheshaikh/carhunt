@@ -30,6 +30,12 @@ export default function ListingDetail({ listing: l, onClose, onAction }: Props) 
   const [trimBase, setTrimBase] = useState(() => parseTrim(l.trim).base);
   const [trimDrv, setTrimDrv]   = useState(() => parseTrim(l.trim).drivetrain);
   const [drivetrain, setDrivetrain] = useState<"fwd" | "awd" | "">(l.drivetrain ?? "");
+  const [userNotes, setUserNotes] = useState(l.user_notes ?? "");
+  const [isSavingNotes, setIsSavingNotes] = useState(false);
+
+  useEffect(() => {
+    setUserNotes(l.user_notes ?? "");
+  }, [l.id, l.user_notes]);
 
   useEffect(() => {
     fetch(`/api/trims?make=${encodeURIComponent(l.make)}&model=${encodeURIComponent(l.model)}&year=${l.year}`)
@@ -81,6 +87,23 @@ export default function ListingDetail({ listing: l, onClose, onAction }: Props) 
       body: JSON.stringify({ drivetrain: val || null }),
     });
     onAction(l.id, "edited");
+  };
+
+  const handleSaveNotes = async () => {
+    if (userNotes === (l.user_notes ?? "")) return;
+    setIsSavingNotes(true);
+    try {
+      await fetch(`/api/listings/${l.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ user_notes: userNotes || null }),
+      });
+      onAction(l.id, "edited");
+    } catch (e) {
+      console.error("Failed to save notes:", e);
+    } finally {
+      setIsSavingNotes(false);
+    }
   };
 
   const onKeyDown = (e: React.KeyboardEvent, field: string) => {
@@ -321,6 +344,32 @@ export default function ListingDetail({ listing: l, onClose, onAction }: Props) 
           )}
         </div>
       )}
+
+      {/* Personal Notes */}
+      <div className="space-y-2 pt-2 border-t border-zinc-800">
+        <div className="flex items-center justify-between">
+          <p className="text-sm font-medium text-zinc-300">My Notes</p>
+          {isSavingNotes ? (
+            <span className="text-[10px] text-zinc-500 font-mono">Saving...</span>
+          ) : (
+            userNotes !== (l.user_notes ?? "") && (
+              <button
+                onClick={handleSaveNotes}
+                className="text-[10px] bg-blue-600 hover:bg-blue-500 text-white font-semibold px-2 py-0.5 rounded transition-colors"
+              >
+                Save Changes
+              </button>
+            )
+          )}
+        </div>
+        <textarea
+          value={userNotes}
+          onChange={(e) => setUserNotes(e.target.value)}
+          onBlur={handleSaveNotes}
+          placeholder="Add your own private notes about this listing (negotiation, condition, owner replies, etc.). Auto-saves on blur."
+          className="w-full h-24 bg-zinc-900 border border-zinc-800 rounded-lg p-3 text-xs text-zinc-200 placeholder-zinc-600 focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500 transition-all resize-none"
+        />
+      </div>
 
       {/* Score Breakdown */}
       {l.value_score != null && (

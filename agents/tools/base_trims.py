@@ -57,6 +57,8 @@ def split_cx50_model(make: str, model: str, raw_trim: str, raw_text: str | None 
     """Return 'CX-50 Hybrid' if model is CX-50 and trim/text indicates it is a hybrid."""
     if make.lower() != "mazda" or _norm(model) not in ("cx50", "cx50hybrid"):
         return model
+    if "hybrid" in model.lower():
+        return "CX-50 Hybrid"
     trim_lower = (raw_trim or "").lower()
     text_lower = (raw_text or "").lower()
     if "hybrid" in trim_lower or "hybrid" in text_lower:

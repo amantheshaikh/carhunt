@@ -121,7 +121,7 @@ carhunt/
 │       ├── dealer_scraper.py   # Playwright + API scraper for dealer websites
 │       ├── db.py               # psycopg2 helpers
 │       ├── scoring.py          # score_listing() + drivetrain/powertrain detection
-│       ├── price_model.py      # HistGradientBoostingRegressor fair-price estimator
+│       ├── price_model.py      # Stacked ensemble fair-price estimator (GB + KNN + Ridge)
 │       ├── base_trims.py       # Trim allowlist + canonical_trim normalization (LLM fallback)
 │       └── log_tee.py          # stdout/stderr tee → /tmp/carhunt-refresh.log
 ├── db/
