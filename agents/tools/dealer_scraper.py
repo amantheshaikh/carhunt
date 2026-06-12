@@ -1505,6 +1505,8 @@ def scrape_dealer(site: dict, makes: list[str] | None = None,
 
     def _add_used(new_listings: list[dict]) -> None:
         for l in new_listings:
+            # Normalise dealer_name to the canonical site name (scrapers use generic brand strings)
+            l["dealer_name"] = site["name"]
             # Pre-filter: discard non-target makes and out-of-range years before saving
             if _target_makes and (l.get("make") or "").lower() not in _target_makes:
                 continue

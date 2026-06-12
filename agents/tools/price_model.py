@@ -15,7 +15,8 @@ SHAP waterfall still runs on the GB component (TreeExplainer requirement).
 Global fallback (< 30 rows) stays pure GB — cross-model stacking adds noise.
 
 Saved as: agents/tools/price_model_{model_slug}.pkl  (StackedModel dataclass)
-Split models: vehicles in _POWERTRAIN_SPLIT also train _gas / _phev variants.
+Gas/PHEV splits (e.g. XC60 vs XC60 Recharge) are handled as separate cars.json
+entries with separate model names, not via a code-level split.
 """
 import math
 import os
@@ -328,7 +329,7 @@ def _to_features(row: dict) -> list[float]:
         raw_mileage = float(row.get("mileage"))
         
     return [
-        float(row.get("year") or 2025),
+        float(row.get("year") or _CURRENT_YEAR),
         math.log1p(raw_mileage),
         _trim_premium(row),
         {"awd": 1.0, "fwd": 0.0, "unknown": 0.5}[_drivetrain_for(row, trim, model, raw)],
@@ -507,6 +508,11 @@ def _fit_stacked(model_name: str, X: list, y: list, label: str, pkl_path: str, s
     raw_w = meta.coef_
     meta_weights = raw_w / raw_w.sum()
 
+    # OOF MAE — honest estimate of generalisation error (computed before full refit)
+    oof_stack = oof @ meta_weights
+    oof_gb_mae    = np.mean(np.abs(oof[:, 0] - y_arr))
+    oof_stack_mae = np.mean(np.abs(oof_stack  - y_arr))
+
     # Refit base models on full data
     gb_pipe.fit(X_arr, y_arr)
     knn_pipe.fit(X_arr, y_arr)
@@ -514,10 +520,8 @@ def _fit_stacked(model_name: str, X: list, y: list, label: str, pkl_path: str, s
 
     stacked = StackedModel(gb=gb_pipe, knn=knn_pipe, ridge=ridge_pipe, meta_weights=meta_weights)
 
-    gb_mae    = np.mean(np.abs(gb_pipe.predict(X_arr) - y_arr))
-    stack_mae = np.mean(np.abs(stacked.predict(X_arr) - y_arr))
     w = meta_weights
-    print(f"  [{label}] n={n}  GB MAE=${gb_mae:,.0f}  Stack MAE=${stack_mae:,.0f}"
+    print(f"  [{label}] n={n}  OOF GB MAE=${oof_gb_mae:,.0f}  OOF Stack MAE=${oof_stack_mae:,.0f}"
           f"  w=[GB={w[0]:.2f} KNN={w[1]:.2f} Ridge={w[2]:.2f}]")
 
     if save:
@@ -652,7 +656,10 @@ def explain_listing(listing: dict) -> dict | None:
         shap_vals  = explainer.shap_values(X_scaled)[0]
         ev         = explainer.expected_value
         base_value = float(_np.asarray(ev).flatten()[0])
-        predicted  = int(round(base_value + shap_vals.sum()))
+        gb_pred_val = int(round(base_value + shap_vals.sum()))
+        # Use the stacked blend as the canonical fair price — matches what score_listing uses.
+        # SHAP bars still break down the GB component; they sum to gb_pred, not predicted.
+        predicted  = int(round(pipe.predict(X_raw)[0])) if isinstance(pipe, StackedModel) else gb_pred_val
 
         year           = int(raw_features[0])
         # raw_features[1] is log1p(miles) — show actual miles in label
@@ -686,13 +693,12 @@ def explain_listing(listing: dict) -> dict | None:
             if abs(sv) >= 50  # skip noise
         ]
 
+        gb_pred = gb_pred_val  # equals base_value + shap_vals.sum()
         if isinstance(pipe, StackedModel):
-            gb_pred = int(round(pipe.gb.predict(X_raw)[0]))
             knn_pred = int(round(pipe.knn.predict(X_raw)[0]))
             ridge_pred = int(round(pipe.ridge.predict(X_raw)[0]))
             meta_weights = [float(w) for w in pipe.meta_weights]
         else:
-            gb_pred = int(round(pipe.predict(X_raw)[0]))
             knn_pred = None
             ridge_pred = None
             meta_weights = [1.0, 0.0, 0.0]

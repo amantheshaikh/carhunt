@@ -485,7 +485,7 @@ export default function ListingDetail({ listing: l, onClose, onAction }: Props) 
           {/* SHAP waterfall — GB model */}
           {l.shap_values && (
             <div className="space-y-1.5 pt-1 border-t border-zinc-800">
-              <p className="text-xs font-medium text-zinc-400">GB SHAP Breakdown — why ${l.shap_values.predicted.toLocaleString()} fair value?</p>
+              <p className="text-xs font-medium text-zinc-400">GB SHAP Breakdown — feature contributions to ${l.shap_values.gb_pred?.toLocaleString() ?? l.shap_values.predicted.toLocaleString()} (GB component)</p>
               <div className="flex items-center justify-between text-xs">
                 <span className="text-zinc-500">Average {l.model} price</span>
                 <span className="text-zinc-400 font-mono">${l.shap_values.base_value.toLocaleString()}</span>

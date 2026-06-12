@@ -55,8 +55,8 @@
       "training_trims": ["S", "SE", "SE R-Line Black", "SEL R-Line"],
       "min_year": 2025,
       "msrp": {
-        "2025": { "SE": 32295, "SE AWD": 35970, "SE R-Line Black": 35455, "SE R-Line Black AWD": 36955, "SEL R-Line": 41180 },
-        "2026": { "SE": 35080, "SE AWD": 36580, "SE R-Line Black": 38240, "SE R-Line Black AWD": 39740, "SEL R-Line": 44560 }
+        "2025": { "S": 31000, "SE": 32295, "SE AWD": 35970, "SE R-Line Black": 35455, "SE R-Line Black AWD": 36955, "SEL R-Line": 41180 },
+        "2026": { "S": 31000, "SE": 35080, "SE AWD": 36580, "SE R-Line Black": 38240, "SE R-Line Black AWD": 39740, "SEL R-Line": 44560 }
       }
     },
     {
