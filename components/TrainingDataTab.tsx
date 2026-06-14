@@ -6,14 +6,7 @@ import type { TrainingRow } from "@/app/api/training-data/route";
 type SortKey = "year" | "price" | "mileage" | "trim" | "powertrain" | "drivetrain";
 type SortDir = "asc" | "desc";
 
-interface EditState {
-  price: string;
-  mileage: string;
-  trim: string;
-  year: string;
-  powertrain: string;
-  drivetrain: string;
-}
+
 
 function fmt$(n: number | null) {
   return n == null ? "—" : `$${n.toLocaleString()}`;
@@ -50,34 +43,7 @@ function Badge({ val, styles }: { val: string | null; styles: Record<string, str
   );
 }
 
-function InlineInput({ value, onChange, type = "text", className = "" }: {
-  value: string; onChange: (v: string) => void; type?: string; className?: string;
-}) {
-  return (
-    <input
-      type={type}
-      value={value}
-      onChange={(e) => onChange(e.target.value)}
-      onClick={(e) => e.stopPropagation()}
-      className={`bg-zinc-700 text-white px-1.5 py-0.5 rounded text-xs w-full focus:outline-none focus:ring-1 focus:ring-blue-500 ${className}`}
-    />
-  );
-}
 
-function InlineSelect({ value, options, onChange }: {
-  value: string; options: string[]; onChange: (v: string) => void;
-}) {
-  return (
-    <select
-      value={value}
-      onChange={(e) => onChange(e.target.value)}
-      onClick={(e) => e.stopPropagation()}
-      className="bg-zinc-700 text-white px-1.5 py-0.5 rounded text-xs focus:outline-none focus:ring-1 focus:ring-blue-500"
-    >
-      {options.map((o) => <option key={o} value={o}>{o}</option>)}
-    </select>
-  );
-}
 
 export default function TrainingDataTab() {
   const [models, setModels] = useState<{ model: string; n: number }[]>([]);
@@ -154,7 +120,7 @@ export default function TrainingDataTab() {
     else { setSort(key); setSortDir("asc"); }
   };
 
-  const handleCellClick = (rowId: string, field: string, currentValue: any) => {
+  const handleCellClick = (rowId: string, field: string, currentValue: string | number | null) => {
     setEditingCell({ id: rowId, field });
     setTempValue(currentValue === null || currentValue === undefined ? "" : String(currentValue));
   };
@@ -162,7 +128,7 @@ export default function TrainingDataTab() {
   const handleCellSave = async (row: TrainingRow, field: string) => {
     if (!editingCell) return;
 
-    let newValue: any = tempValue;
+    let newValue: string | number | null = tempValue;
     if (field === "price" || field === "year") {
       newValue = Number(tempValue);
       if (isNaN(newValue)) return;
@@ -173,7 +139,7 @@ export default function TrainingDataTab() {
       newValue = tempValue.trim() || null;
     }
 
-    const originalValue = (row as any)[field];
+    const originalValue = row[field as keyof TrainingRow];
     if (newValue === originalValue) {
       setEditingCell(null);
       return;
@@ -181,7 +147,7 @@ export default function TrainingDataTab() {
 
     // Optimistically update local state
     setRows((prev) =>
-      prev.map((r) => (r.id !== row.id ? r : { ...r, [field]: newValue }))
+      prev.map((r) => (r.id !== row.id ? r : ({ ...r, [field]: newValue } as TrainingRow)))
     );
     setEditingCell(null);
 

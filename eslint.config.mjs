@@ -8,5 +8,8 @@ const __dirname = dirname(__filename);
 const compat = new FlatCompat({ baseDirectory: __dirname });
 
 export default [
+  {
+    ignores: ["agents/.venv/**", ".next/**"],
+  },
   ...compat.extends("next/core-web-vitals", "next/typescript"),
 ];

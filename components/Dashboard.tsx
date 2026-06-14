@@ -3,7 +3,7 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import type { Listing, RefreshLog } from "@/lib/types";
 import type { JobStatus } from "@/app/api/job-status/route";
-import { getDrivetrainTag, getPowertrainTag } from "@/lib/vehicle-tags";
+import { getDrivetrainTag } from "@/lib/vehicle-tags";
 import ListingCard from "./ListingCard";
 import ListingDetail from "./ListingDetail";
 import QueryChat from "./QueryChat";
@@ -110,9 +110,6 @@ function FilterBar({
     if (filters.minDealScore !== "") n++;
     return n;
   }, [filters]);
-
-  const toggle = <K extends keyof Filters>(key: K, val: Filters[K]) =>
-    onFilters({ ...filters, [key]: filters[key] === val ? (Array.isArray(filters[key]) ? [] : "") : val } as Filters);
 
   const toggleModel = (m: string) =>
     onFilters({ ...filters, models: filters.models.includes(m) ? filters.models.filter((x) => x !== m) : [...filters.models, m] });
