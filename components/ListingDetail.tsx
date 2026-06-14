@@ -319,7 +319,7 @@ export default function ListingDetail({ listing: l, onClose, onAction }: Props) 
       </div>
 
       {/* Qualitative insights */}
-      {l.insights && (l.insights.cpo || l.insights.packages.length > 0 || l.insights.price_drop || l.insights.owner_notes) && (
+      {l.insights && (l.insights.cpo || (l.insights.packages && l.insights.packages.length > 0) || l.insights.price_drop || l.insights.owner_notes) && (
         <div className="space-y-2">
           <p className="text-sm font-medium text-zinc-300">Listing Insights</p>
           <div className="flex flex-wrap gap-2">
@@ -333,7 +333,7 @@ export default function ListingDetail({ listing: l, onClose, onAction }: Props) 
                 Price drop: ${l.insights.price_drop.toLocaleString()}
               </span>
             )}
-            {l.insights.packages.map((pkg) => (
+            {(l.insights.packages || []).map((pkg) => (
               <span key={pkg} className="px-2 py-1 text-xs rounded bg-zinc-800 text-zinc-300 border border-zinc-700">
                 {pkg}
               </span>

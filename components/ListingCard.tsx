@@ -109,7 +109,7 @@ export default function ListingCard({ listing: l, selected, onSelect, onAction, 
           </div>
 
           {/* Insight tags */}
-          {l.insights && (l.insights.cpo || l.insights.packages.length > 0 || l.insights.price_drop || l.insights.owner_notes) && (
+          {l.insights && (l.insights.cpo || (l.insights.packages && l.insights.packages.length > 0) || l.insights.price_drop || l.insights.owner_notes) && (
             <div className="flex items-center gap-1 mt-1.5 flex-wrap">
               {l.insights.cpo && (
                 <span className="px-1.5 py-0.5 text-xs rounded font-medium bg-violet-900/70 text-violet-300 border border-violet-700">CPO</span>
@@ -119,7 +119,7 @@ export default function ListingCard({ listing: l, selected, onSelect, onAction, 
                   ${l.insights.price_drop.toLocaleString()} drop
                 </span>
               )}
-              {l.insights.packages.slice(0, 2).map((pkg) => (
+              {(l.insights.packages || []).slice(0, 2).map((pkg) => (
                 <span key={pkg} className="px-1.5 py-0.5 text-xs rounded bg-zinc-700/80 text-zinc-300">
                   {pkg}
                 </span>
