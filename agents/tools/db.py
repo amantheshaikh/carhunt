@@ -13,47 +13,58 @@ def get_conn():
 
 
 def fetch_one(sql: str, params=()) -> dict | None:
-    with get_conn() as conn:
-        with conn.cursor() as cur:
-            cur.execute(sql, params)
-            return cur.fetchone()
+    conn = get_conn()
+    try:
+        with conn:
+            with conn.cursor() as cur:
+                cur.execute(sql, params)
+                return cur.fetchone()
+    finally:
+        conn.close()
 
 
 def fetch_all(sql: str, params=()) -> list[dict]:
-    with get_conn() as conn:
-        with conn.cursor() as cur:
-            cur.execute(sql, params)
-            return cur.fetchall()
+    conn = get_conn()
+    try:
+        with conn:
+            with conn.cursor() as cur:
+                cur.execute(sql, params)
+                return cur.fetchall()
+    finally:
+        conn.close()
 
 
 def execute(sql: str, params=()) -> None:
-    with get_conn() as conn:
-        with conn.cursor() as cur:
-            cur.execute(sql, params)
-        conn.commit()
+    conn = get_conn()
+    try:
+        with conn:
+            with conn.cursor() as cur:
+                cur.execute(sql, params)
+    finally:
+        conn.close()
 
 
 def execute_values(sql: str, values: list[tuple], template: str | None = None) -> None:
-    """Batch insert/upsert using psycopg2.extras.execute_values.
-
-    template: optional per-row SQL template, e.g. "(%s, %s, 'literal', now())"
-    lets you embed SQL expressions (now(), constants) alongside bound params.
-    """
     if not values:
         return
-    with get_conn() as conn:
-        with conn.cursor() as cur:
-            psycopg2.extras.execute_values(cur, sql, values, template=template)
-        conn.commit()
+    conn = get_conn()
+    try:
+        with conn:
+            with conn.cursor() as cur:
+                psycopg2.extras.execute_values(cur, sql, values, template=template)
+    finally:
+        conn.close()
 
 
 def execute_returning(sql: str, params=()) -> dict | None:
-    with get_conn() as conn:
-        with conn.cursor() as cur:
-            cur.execute(sql, params)
-            result = cur.fetchone()
-        conn.commit()
-        return result
+    conn = get_conn()
+    try:
+        with conn:
+            with conn.cursor() as cur:
+                cur.execute(sql, params)
+                return cur.fetchone()
+    finally:
+        conn.close()
 
 
 def refresh_self_computed_medians() -> int:

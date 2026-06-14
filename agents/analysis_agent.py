@@ -36,8 +36,8 @@ def run() -> dict:
             drivetrain_updates.append((resolved, lid))
             listing["drivetrain"] = resolved  # use resolved value for scoring features too
 
-        gb_price = predict_fair_price(listing)
-        score = score_listing(listing["price"], gb_price)
+        gb_price, residual_std = predict_fair_price(listing)
+        score = score_listing(listing["price"], gb_price, residual_std or 0.0)
 
         if score is None:
             # No ML model yet — activate so it shows as Unscored

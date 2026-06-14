@@ -48,6 +48,7 @@ export interface Listing {
     knn_pred?: number | null;
     ridge_pred?: number | null;
     meta_weights?: number[];
+    residual_std?: number | null;
   } | null;
 }
 

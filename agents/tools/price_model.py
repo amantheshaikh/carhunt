@@ -45,6 +45,7 @@ class StackedModel:
     knn:          Pipeline
     ridge:        Pipeline
     meta_weights: np.ndarray  # shape (3,) — GB, KNN, Ridge; normalised to sum=1
+    residual_std: float = 0.0  # OOF residual std dev — used to normalise deal score
 
     def predict(self, X) -> np.ndarray:
         X = np.array(X)
@@ -82,7 +83,7 @@ _TRIM_LEVELS: dict[str, dict[str, int]] = {
     "tucson hybrid":    {"blue": 1, "sel": 2, "sel convenience": 3, "n line": 4, "limited": 5, "sel n-line": 4},
     "sportage hybrid":  {"lx": 1, "ex": 2, "sx": 3, "sx prestige": 4, "x-line": 4, "x-pro": 5, "x-pro prestige": 6, "prestige": 4},
     "sportage phev":    {"ex": 1, "ex premium": 2, "x-line": 3, "x-line prestige": 4, "sx": 5},
-    "gv70":             {"standard": 1, "select": 2, "advanced": 3, "advanced plus": 4, "sport prestige": 5},
+    "gv70":             {"standard": 1, "select": 2, "advanced": 3, "sport prestige": 4},
     "tiguan":           {"s": 1, "se": 2, "se r-line": 3, "se r-line black": 4, "sel": 4, "sel premium": 5, "sel r-line black": 5},
     "envision":         {"preferred": 1, "sport touring": 2, "avenir": 3},
     "x1":               {"sdrive28i": 1, "xdrive28i": 2},
@@ -316,6 +317,35 @@ def resolve_drivetrain(listing: dict) -> str:
     return _drivetrain_for(listing, trim, model, raw)
 
 
+def _base_msrp(row: dict) -> float:
+    model = (row.get("model") or "").lower().strip()
+    year = int(row.get("year") or _CURRENT_YEAR)
+    
+    v = None
+    for veg in _VEH_LIST:
+        if veg["model"].lower() == model:
+            v = veg
+            break
+            
+    if not v or "msrp" not in v or not v["msrp"]:
+        return 35000.0
+        
+    msrp_table = v["msrp"]
+    year_str = str(year)
+    if year_str not in msrp_table:
+        years = sorted([int(y) for y in msrp_table.keys()])
+        if not years:
+            return 35000.0
+        closest_yr = min(years, key=lambda y: abs(y - year))
+        year_str = str(closest_yr)
+        
+    msrp_year_table = msrp_table[year_str]
+    if not msrp_year_table:
+        return 35000.0
+        
+    return float(min(msrp_year_table.values()))
+
+
 def _to_features(row: dict) -> list[float]:
     model = (row.get("model") or "").lower()
     trim  = row.get("trim")
@@ -329,6 +359,7 @@ def _to_features(row: dict) -> list[float]:
         raw_mileage = float(row.get("mileage"))
         
     return [
+        _base_msrp(row),
         float(row.get("year") or _CURRENT_YEAR),
         math.log1p(raw_mileage),
         _trim_premium(row),
@@ -339,15 +370,16 @@ def _to_features(row: dict) -> list[float]:
     ]
 
 
-# Feature order: [year, mileage, trim_premium, drivetrain, powertrain, cpo]
+# Feature order: [base_msrp, year, mileage, trim_premium, drivetrain, powertrain, cpo]
 # Monotone constraints enforce economic common sense:
+#   base_msrp (+1): more expensive baseline car = more expensive overall
 #   year (+1): newer = more expensive
 #   mileage (-1): more miles = less expensive
 #   trim_premium (+1): higher trim = more expensive
 #   drivetrain (+1): AWD > FWD
 #   powertrain (+1): hybrid/EV > gas
 #   cpo (+1): CPO > non-CPO
-_MONOTONIC_CST = [1, -1, 1, 1, 1, 1]  # year+, mileage-, trim_premium+, drivetrain+, powertrain+, cpo+
+_MONOTONIC_CST = [1, 1, -1, 1, 1, 1, 1]  # base_msrp+, year+, mileage-, trim_premium+, drivetrain+, powertrain+, cpo+
 
 
 def _make_gb_pipeline() -> Pipeline:
@@ -368,7 +400,7 @@ def _make_knn_pipeline(n: int) -> Pipeline:
     k = min(7, max(3, n // 10))
     return Pipeline([
         ("scaler", StandardScaler()),
-        ("knn", KNeighborsRegressor(n_neighbors=k, weights="distance")),
+        ("knn", KNeighborsRegressor(n_neighbors=k, weights="uniform")),
     ])
 
 
@@ -421,6 +453,7 @@ def load_training_data_for(model_name: str, powertrain_filter: str | None = None
     join_pt_sql  = "AND ptd.powertrain = %s" if powertrain_filter else ""
     pt_params    = [powertrain_filter] if powertrain_filter else []
 
+    params = [key, effective_min] + max_year_params + [_CURRENT_YEAR] + pt_params
     train_rows = fetch_all(f"""
         WITH price_bounds AS (
             SELECT cte.year,
@@ -434,19 +467,29 @@ def load_training_data_for(model_name: str, powertrain_filter: str | None = None
               {cte_pt_sql}
             GROUP BY cte.year
             HAVING count(*) >= 5
+        ),
+        global_bounds AS (
+            SELECT PERCENTILE_CONT(0.10) WITHIN GROUP (ORDER BY cte.price)::int AS p10,
+                   PERCENTILE_CONT(0.97) WITHIN GROUP (ORDER BY cte.price)::int AS p97
+            FROM price_training_data cte
+            WHERE lower(cte.model) = %s
+              AND cte.price BETWEEN 20000 AND {max_price} AND cte.mileage BETWEEN 100 AND 80000
+              AND cte.year >= %s {cte_max_yr}
+              AND (cte.year IS NULL OR cte.mileage::float / GREATEST(1, %s - cte.year + 1) <= 14000)
+              {cte_pt_sql}
         )
         SELECT ptd.make, ptd.model, ptd.year, ptd.mileage, ptd.price, ptd.trim, ptd.powertrain, ptd.drivetrain, ptd.cpo
         FROM price_training_data ptd
-        JOIN price_bounds pb ON ptd.year = pb.year
+        LEFT JOIN price_bounds pb ON ptd.year = pb.year
+        CROSS JOIN global_bounds gb
         WHERE lower(ptd.model) = %s
           AND ptd.price IS NOT NULL AND ptd.mileage IS NOT NULL
           AND ptd.price BETWEEN 20000 AND {max_price} AND ptd.mileage BETWEEN 100 AND 80000
           AND ptd.year >= %s {join_max_yr}
           AND ptd.mileage::float / GREATEST(1, %s - ptd.year + 1) <= 14000
-          AND ptd.price BETWEEN pb.p10 AND pb.p97
+          AND ptd.price BETWEEN COALESCE(pb.p10, gb.p10) AND COALESCE(pb.p97, gb.p97)
           {join_pt_sql}
-    """, (key, effective_min, *max_year_params, _CURRENT_YEAR, *pt_params,
-          key, effective_min, *max_year_params, _CURRENT_YEAR, *pt_params))
+    """, tuple(params + params + params))
 
     max_yr_sql = f"AND year <= {target_max}" if target_max else ""
     listing_rows = fetch_all(f"""
@@ -508,17 +551,19 @@ def _fit_stacked(model_name: str, X: list, y: list, label: str, pkl_path: str, s
     raw_w = meta.coef_
     meta_weights = raw_w / raw_w.sum()
 
-    # OOF MAE — honest estimate of generalisation error (computed before full refit)
+    # OOF MAE and residual std — honest estimates before full refit
     oof_stack = oof @ meta_weights
     oof_gb_mae    = np.mean(np.abs(oof[:, 0] - y_arr))
     oof_stack_mae = np.mean(np.abs(oof_stack  - y_arr))
+    oof_residual_std = float(np.std(oof_stack - y_arr))
 
     # Refit base models on full data
     gb_pipe.fit(X_arr, y_arr)
     knn_pipe.fit(X_arr, y_arr)
     ridge_pipe.fit(X_arr, y_arr)
 
-    stacked = StackedModel(gb=gb_pipe, knn=knn_pipe, ridge=ridge_pipe, meta_weights=meta_weights)
+    stacked = StackedModel(gb=gb_pipe, knn=knn_pipe, ridge=ridge_pipe,
+                           meta_weights=meta_weights, residual_std=oof_residual_std)
 
     w = meta_weights
     print(f"  [{label}] n={n}  OOF GB MAE=${oof_gb_mae:,.0f}  OOF Stack MAE=${oof_stack_mae:,.0f}"
@@ -584,26 +629,34 @@ def _detect_powertrain_for(listing: dict) -> str:
     return listing.get("powertrain") or detect_powertrain(trim, model, raw)
 
 
-def predict_fair_price(listing: dict) -> int | None:
-    """Predict fair price using the per-model estimator, falling back to global."""
+def predict_fair_price(listing: dict) -> tuple[int, float] | tuple[None, None]:
+    """Predict fair price using the per-model estimator, falling back to global.
+
+    Returns (fair_price, residual_std) — both None if no model available.
+    residual_std is the OOF residual std dev used to normalise the deal score.
+    """
     model_name = (listing.get("model") or "").lower().strip()
     features   = [_to_features(listing)]
 
     model = _load_model(_pkl_path(model_name))
     if model is not None:
         try:
-            return int(round(model.predict(features)[0]))
+            price = int(round(model.predict(features)[0]))
+            std   = model.residual_std if isinstance(model, StackedModel) else 0.0
+            return price, std
         except Exception:
             pass
 
     global_model = _load_model(_pkl_path("_global"))
     if global_model is not None:
         try:
-            return int(round(global_model.predict(features)[0]))
+            price = int(round(global_model.predict(features)[0]))
+            std   = global_model.residual_std if isinstance(global_model, StackedModel) else 0.0
+            return price, std
         except Exception:
             pass
 
-    return None
+    return None, None
 
 
 _DRIVETRAIN_LABEL = {1.0: "AWD", 0.0: "FWD", 0.5: "Unknown drivetrain"}
@@ -657,30 +710,42 @@ def explain_listing(listing: dict) -> dict | None:
         ev         = explainer.expected_value
         base_value = float(_np.asarray(ev).flatten()[0])
         gb_pred_val = int(round(base_value + shap_vals.sum()))
-        # Use the stacked blend as the canonical fair price — matches what score_listing uses.
-        # SHAP bars still break down the GB component; they sum to gb_pred, not predicted.
         predicted  = int(round(pipe.predict(X_raw)[0])) if isinstance(pipe, StackedModel) else gb_pred_val
 
-        year           = int(raw_features[0])
-        # raw_features[1] is log1p(miles) — show actual miles in label
+        # Scale SHAP values proportionally so they sum to predicted - base_value
+        gb_delta = gb_pred_val - base_value
+        target_delta = predicted - base_value
+        if abs(gb_delta) > 1e-2:
+            scale_factor = target_delta / gb_delta
+            shap_vals = shap_vals * scale_factor
+        else:
+            if abs(target_delta) > 1e-2:
+                shap_vals = _np.array([target_delta / len(shap_vals)] * len(shap_vals))
+            else:
+                shap_vals = _np.zeros_like(shap_vals)
+
+        base_msrp      = raw_features[0]
+        year           = int(raw_features[1])
+        # raw_features[2] is log1p(miles) — show actual miles in label
         if listing.get("mileage") is None:
             vehicle_year = int(listing.get("year") or _CURRENT_YEAR)
             age_years = max(1, _CURRENT_YEAR - vehicle_year + 1)
             mileage_actual = int(min(80_000, age_years * 12_000))
         else:
             mileage_actual = int(listing.get("mileage"))
-        trim_lvl   = raw_features[2]
-        drivetrain = raw_features[3]
-        powertrain = raw_features[4]
-        cpo        = raw_features[5]
+        trim_lvl   = raw_features[3]
+        drivetrain = raw_features[4]
+        powertrain = raw_features[5]
+        cpo        = raw_features[6]
 
         # Use the original ordinal trim level for fallback naming if trim is None
         trim_ord = _trim_level(model_name, listing.get("trim"))
         trim_name = listing.get("trim") or f"Level {trim_ord:.0f}"
 
         raw_labels = [
-            (f"Year {year}",                  raw_features[0]),
-            (f"{mileage_actual:,} miles",     mileage_actual),   # show actual miles, not log value
+            (f"Base MSRP — ${base_msrp:,.0f}", base_msrp),
+            (f"Year {year}",                  float(year)),
+            (f"{mileage_actual:,} miles",     float(mileage_actual)),   # show actual miles, not log value
             (f"Trim — {trim_name[:25]}",      trim_lvl),
             (_DRIVETRAIN_LABEL.get(drivetrain, "Drivetrain"), drivetrain),
             (_POWERTRAIN_LABEL.get(powertrain, "Powertrain"), powertrain),
@@ -698,10 +763,12 @@ def explain_listing(listing: dict) -> dict | None:
             knn_pred = int(round(pipe.knn.predict(X_raw)[0]))
             ridge_pred = int(round(pipe.ridge.predict(X_raw)[0]))
             meta_weights = [float(w) for w in pipe.meta_weights]
+            residual_std = float(pipe.residual_std)
         else:
             knn_pred = None
             ridge_pred = None
             meta_weights = [1.0, 0.0, 0.0]
+            residual_std = 0.0
 
         return {
             "base_value": int(round(base_value)),
@@ -711,6 +778,7 @@ def explain_listing(listing: dict) -> dict | None:
             "knn_pred":   knn_pred,
             "ridge_pred": ridge_pred,
             "meta_weights": meta_weights,
+            "residual_std": residual_std,
         }
     except Exception:
         return None

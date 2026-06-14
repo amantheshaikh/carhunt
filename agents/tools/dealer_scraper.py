@@ -196,14 +196,17 @@ async def _scrape_cobalt_async(inventory_url: str, brand: str,
                     photo = images[0].get("url") if images and isinstance(images[0], dict) else None
                     if not price:
                         continue
+                    url = detail_url or inventory_url
+                    cpo = "/certified" in url.lower()
                     inventory.append(_make_listing(
                         brand, ext_key,
                         vin=vin, make=make, model=model, trim=trim,
                         year=int(year) if year else None, body_type=None,
                         mileage=mileage, price=price,
-                        listing_url=detail_url or inventory_url,
+                        listing_url=url,
                         photos_url=[photo] if photo else [],
                         dealer_name=brand,
+                        insights={"cpo": cpo} if cpo else None,
                         raw={"vin": vin, "year": year, "make": make, "model": model,
                              "trim": trim, "price": price, "mileage": mileage},
                     ))
@@ -444,6 +447,7 @@ def _make_listing(
     dealer_phone: str | None = None,
     condition: str = "used",
     raw: dict | None = None,
+    insights: dict | None = None,
 ) -> dict:
     """Assemble the standard dealer listing dict — source/title_status/accident_count/email are always the same."""
     return {
@@ -466,6 +470,7 @@ def _make_listing(
         "title_status":   "clean",
         "accident_count": 0,
         "raw":            raw or {},
+        "insights":       insights,
     }
 
 
@@ -570,6 +575,7 @@ def _scrape_dealerinspire_algolia(app_id: str, api_key: str, index: str, brand: 
                 listing_url=hit.get("link") or website_url,
                 photos_url=[hit["thumbnail"]] if hit.get("thumbnail") else [],
                 dealer_name=hit.get("location") or brand,
+                insights={"cpo": True} if str(hit.get("certified", "0")) == "1" else None,
                 raw={"vin": vin, "year": hit.get("year"), "make": hit.get("make"),
                      "model": hit.get("model"), "trim": hit.get("trim"), "price": price, "mileage": hit.get("miles")},
             ))
@@ -1336,6 +1342,90 @@ def _get_known_models() -> list[str]:
     return _KNOWN_MODELS
 
 
+import os
+import sys
+
+_llm_title_cache = None
+_TITLE_CACHE_FILE = os.path.join(os.path.dirname(__file__), "..", ".title_cache.json")
+
+
+def _load_title_cache():
+    global _llm_title_cache
+    if _llm_title_cache is not None:
+        return
+    _llm_title_cache = {}
+    if "pytest" in sys.modules:
+        return
+    if os.path.exists(_TITLE_CACHE_FILE):
+        try:
+            with open(_TITLE_CACHE_FILE) as f:
+                _llm_title_cache = json.load(f)
+        except Exception:
+            pass
+
+
+def _save_title_cache():
+    if _llm_title_cache is None or "pytest" in sys.modules:
+        return
+    try:
+        with open(_TITLE_CACHE_FILE, "w") as f:
+            json.dump(_llm_title_cache, f, indent=2)
+    except Exception:
+        pass
+
+
+def _parse_title_llm(title: str) -> tuple[str, str, str, str] | None:
+    """Fallback LLM parser to extract (year, make, model, trim) from messy title."""
+    from tools.base_trims import get_llm_client, _VEHICLES
+    client = get_llm_client()
+    if client is None:
+        return None
+
+    # Compile list of target makes, models, and allowed trims
+    targets = []
+    for v in _VEHICLES:
+        targets.append(f"- Make: {v['make']}, Model: {v['model']}, Trims: {v['trims']}")
+    targets_str = "\n".join(targets)
+
+    prompt = (
+        f"You are a structured parser for car titles. Your job is to extract the year, make, model, and trim from the listing title: \"{title}\".\n\n"
+        "We only track a specific list of target vehicles. Match the title to one of these targets ONLY if it is the exact same model line (e.g. do NOT map a 'Lexus GX' or 'Lexus LX' to 'Lexus NX 350h').\n"
+        "Here are our target vehicles:\n"
+        f"{targets_str}\n\n"
+        "Return a JSON object only, with this exact schema:\n"
+        '{"matched": true, "year": "YYYY", "make": "MakeName", "model": "ModelName", "trim": "TrimName"}\n'
+        "Use the exact, case-sensitive Make and Model from the target list above if it matches. "
+        "For trim, map to the closest target trim tier if standard abbreviations are used (e.g. 'Prem+' -> 'Premium Plus'), otherwise extract the raw trim.\n"
+        "If the vehicle in the title does NOT match any of our target vehicles (different make/model or brand), return:\n"
+        '{"matched": false}'
+    )
+
+    try:
+        resp = client.chat.completions.create(
+            model="deepseek/deepseek-v4-flash",
+            messages=[{"role": "user", "content": prompt}],
+            max_tokens=150,
+            temperature=0,
+            response_format={"type": "json_object"},
+        )
+        answer = (resp.choices[0].message.content or "").strip()
+        if not answer:
+            return None
+        data = json.loads(answer)
+        if not data.get("matched"):
+            return None
+        year = str(data.get("year") or "")
+        make = str(data.get("make") or "")
+        model = str(data.get("model") or "")
+        trim = str(data.get("trim") or "")
+        if not year or not make or not model:
+            return None
+        return year, make, model, trim
+    except Exception as e:
+        print(f"  [title:llm] error parsing '{title}': {e}", flush=True)
+        return None
+
+
 _TITLE_PREFIXES = re.compile(
     r"^(pre[- ]owned|certified\s+(pre[- ]owned)?|used|new|cpo)\s+", re.IGNORECASE
 )
@@ -1356,6 +1446,34 @@ def _parse_title(title: str) -> tuple[str, str, str, str]:
             model = rest[:len(known)]
             trim = rest[len(known):].strip()
             break
+
+    # Gating check: only trigger LLM if parsing was invalid or didn't match our targets
+    from tools.base_trims import get_allowed_makes
+    allowed_makes = {m.lower() for m in get_allowed_makes()}
+    allowed_models = {m.lower() for m in _get_known_models()}
+
+    is_valid_parse = (
+        year.isdigit() and len(year) == 4 and
+        make.lower() in allowed_makes and
+        model.lower() in allowed_models
+    )
+
+    if not is_valid_parse:
+        _load_title_cache()
+        cache_key = title.strip()
+        if cache_key in _llm_title_cache:
+            res = _llm_title_cache[cache_key]
+            if res:
+                return tuple(res)
+        else:
+            res = _parse_title_llm(title)
+            # Store even if None to prevent retries
+            _llm_title_cache[cache_key] = res
+            _save_title_cache()
+            if res:
+                print(f"  [title:llm] resolved '{title}' -> {res}", flush=True)
+                return res
+
     return year, make, model, trim
 
 

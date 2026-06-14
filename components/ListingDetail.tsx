@@ -445,7 +445,7 @@ export default function ListingDetail({ listing: l, onClose, onAction }: Props) 
                   }
                 ].map((model, idx) => {
                   if (model.pred == null) return null;
-                  const score = getValueScore(l.price, model.pred);
+                  const score = getValueScore(l.price, model.pred, l.shap_values?.residual_std);
                   const weightPct = Math.round(model.weight * 100);
                   if (weightPct === 0 && model.weight === 0) return null;
                   return (

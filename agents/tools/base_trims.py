@@ -107,10 +107,9 @@ def _engine_filter_passes(v: dict, trim: str, source: str | None = None) -> bool
     engine_filter = v.get("engine_filter")
     if not engine_filter:
         return True
-    if source == "carscom":
-        model_name = v.get("model", "").lower()
-        if any(ef.lower() in model_name for ef in engine_filter):
-            return True
+    model_name = v.get("model", "").lower()
+    if any(ef.lower() in model_name for ef in engine_filter):
+        return True
     raw = trim.lower()
     return any(ef.lower() in raw for ef in engine_filter)
 
@@ -161,7 +160,7 @@ def _save_trim_cache():
 # Shared LLM client — instantiated once, reused across all trim lookups.
 _llm_client = None
 
-def _get_llm_client():
+def get_llm_client():
     global _llm_client
     if _llm_client is None:
         try:
@@ -180,7 +179,7 @@ def _llm_canonical_trim(make: str, model: str, raw_trim: str, allowed_trims: lis
     Returns the matched canonical trim (guaranteed to be in allowed_trims), or
     None if no reasonable match.  Callers are responsible for caching.
     """
-    client = _get_llm_client()
+    client = get_llm_client()
     if client is None:
         return None
     try:
@@ -214,6 +213,11 @@ def is_trim_allowed_for_training(make: str, model: str, trim: str | None, source
     training_trims includes lower base trims (e.g. Blue, SEL, LX) that broaden the
     depreciation curve for ML training without appearing in sourcing results.
     Falls back to trims if training_trims is not set.
+
+    For engine-filtered models (e.g. GV70 2.5T vs 3.5T), once the engine_filter
+    check passes we accept the listing even if the sub-trim isn't recognized — the
+    engine variant is the critical gate, and CarGurus sometimes only knows the engine
+    designation (e.g. '2.5T AWD') without the full trim name.
     """
     if not trim:
         return True
@@ -222,11 +226,13 @@ def is_trim_allowed_for_training(make: str, model: str, trim: str | None, source
         return True
     if not _engine_filter_passes(v, trim, source=source):
         return False
+    # If vehicle uses engine_filter, passing that check is sufficient for training.
+    if v.get("engine_filter"):
+        return True
     allowed = v.get("training_trims") or v.get("trims")
     if not allowed:
         return True
     return _trim_matches_any(_normalize_trim(trim), allowed)
-
 
 def is_trim_allowed(make: str, model: str, trim: str | None) -> bool:
     """Return True if the trim is acceptable for this make/model.
@@ -243,7 +249,22 @@ def is_trim_allowed(make: str, model: str, trim: str | None) -> bool:
     allowed = v.get("trims")
     if not allowed:
         return True
-    return _trim_matches_any(_normalize_trim(trim), allowed)
+    
+    t = _normalize_trim(trim)
+    if _trim_matches_any(t, allowed):
+        return True
+
+    # Check for BMW token-reordering (e.g. "30 xDrive" -> xDrive30i)
+    import re as _re
+    t_flat = t.replace(" ", "")
+    for drive in ("xdrive", "sdrive"):
+        if drive in t_flat:
+            num = _re.sub(r"[^0-9]", "", t_flat.replace(drive, ""))
+            for a in allowed:
+                a_flat = a.lower().replace(" ", "").replace("-", "")
+                if a_flat.startswith(drive) and _re.sub(r"[^0-9]", "", a_flat) == num:
+                    return True
+    return False
 
 
 def trim_belongs_to_different_model(make: str, model: str, trim: str | None) -> bool:

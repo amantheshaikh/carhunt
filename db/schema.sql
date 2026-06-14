@@ -137,3 +137,5 @@ CREATE INDEX IF NOT EXISTS idx_listings_source ON listings(source);
 CREATE INDEX IF NOT EXISTS idx_listings_first_seen ON listings(first_seen_at);
 CREATE INDEX IF NOT EXISTS idx_listings_snoozed ON listings(snoozed_until) WHERE snoozed_until IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_watchlist_listing ON watchlist(listing_id);
+CREATE INDEX IF NOT EXISTS idx_price_training_data_lower_model ON price_training_data (lower(model));
+CREATE INDEX IF NOT EXISTS idx_listings_lower_model ON listings (lower(model));

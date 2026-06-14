@@ -169,8 +169,8 @@ def test_llm_fallback_canonical_trim(monkeypatch):
     """canonical_trim should use LLM when all 3 regex passes fail."""
     monkeypatch.setattr(_bt, "_llm_canonical_trim", _mock_llm)
     monkeypatch.setattr(_bt, "_llm_trim_cache", {})
-    assert canonical_trim("Genesis", "GV70", "ADV PLUS") == "Advanced Plus"
     assert canonical_trim("Mazda", "CX-50 Hybrid", "PREM PLUS") == "Premium Plus"
+    assert canonical_trim("Mazda", "CX-50 Hybrid", "PREM+") == "Premium Plus"
 
 
 def test_llm_fallback_canonical_trim_for_accepted_listing(monkeypatch):
@@ -215,11 +215,18 @@ def test_llm_cache_prevents_duplicate_calls(monkeypatch):
     call_count = {"n": 0}
     def _counting_llm(make, model, raw_trim, allowed_trims):
         call_count["n"] += 1
-        return "Advanced Plus" if raw_trim.lower() == "adv plus" else None
+        return "Premium Plus" if raw_trim.lower() == "prem plus" else None
 
     monkeypatch.setattr(_bt, "_llm_canonical_trim", _counting_llm)
     monkeypatch.setattr(_bt, "_llm_trim_cache", {})
-    canonical_trim("Genesis", "GV70", "ADV PLUS")
-    canonical_trim("Genesis", "GV70", "ADV PLUS")
+    canonical_trim("Mazda", "CX-50 Hybrid", "PREM PLUS")
+    canonical_trim("Mazda", "CX-50 Hybrid", "PREM PLUS")
     assert call_count["n"] == 1  # second call served from _llm_trim_cache
+
+
+def test_bmw_token_reorder_is_trim_allowed():
+    """Verify that is_trim_allowed accepts token-reordered BMW trims like '30 xDrive'."""
+    assert is_trim_allowed("BMW", "X3", "30 xDrive") is True
+    assert is_trim_allowed("BMW", "X3", "30 sDrive") is True
+    assert is_trim_allowed("BMW", "X1", "xDrive28i") is True
 

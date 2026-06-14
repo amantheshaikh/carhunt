@@ -4,6 +4,7 @@ import {
   getPowertrain,
   getDrivetrainTag,
   getPowertrainTag,
+  getValueScore,
 } from "../lib/vehicle-tags";
 
 describe("getDrivetrain", () => {
@@ -92,5 +93,25 @@ describe("getPowertrainTag", () => {
   it("returns 'hybrid' for Volvo Recharge and Lexus 350h", () => {
     expect(getPowertrainTag("Recharge T8", null)).toBe("hybrid");
     expect(getPowertrainTag("350h Premium", null)).toBe("hybrid");
+  });
+});
+
+describe("getValueScore", () => {
+  it("computes percentage fallback score when no residualStd is provided", () => {
+    expect(getValueScore(30000, 30000)).toBe(50);
+    const score = getValueScore(27000, 30000);
+    expect(score).toBeGreaterThanOrEqual(72);
+    expect(score).toBeLessThanOrEqual(78);
+  });
+
+  it("computes z-score based score when residualStd is provided", () => {
+    expect(getValueScore(27000, 30000, 1000)).toBe(94);
+    expect(getValueScore(27000, 30000, 200)).toBe(99);
+  });
+
+  it("returns null for invalid inputs", () => {
+    expect(getValueScore(null, 30000)).toBeNull();
+    expect(getValueScore(30000, null)).toBeNull();
+    expect(getValueScore(30000, 0)).toBeNull();
   });
 });

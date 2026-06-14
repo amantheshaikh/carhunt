@@ -111,7 +111,7 @@ carhunt/
 ├── agents/                     # Python scraping + ML pipeline
 │   ├── orchestrator.py         # Entry point: Sourcing → Price cache → Retrain → Score
 │   ├── sourcing_agent.py       # Scrapes all sources, diffs against DB, enriches new listings
-│   ├── analysis_agent.py       # Scores listings with GB model → listing_scores
+│   ├── analysis_agent.py         # Scores listings with stacked ensemble → listing_scores
 │   ├── query_agent.py          # Natural-language query CLI (spawned by /api/query)
 │   ├── training_collector.py   # Collects broad market data for ML training
 │   ├── backfill_training.py    # Targeted fix/rescrape of training data for one model
@@ -134,7 +134,11 @@ carhunt/
 
 ## How the Value Score works
 
-Each listing is scored 0–100 using `sigmoid((fair_price − listing_price) / fair_price × 11)`.
+Each listing is scored 0–100 using a per-model standard deviation z-score formula:
+`sigmoid((fair_price − listing_price) / residual_std × 0.94)` (where `residual_std` has a minimum floor of $600.0).
+
+If no per-model standard deviation is available, it falls back to the percentage-based formula:
+`sigmoid((fair_price − listing_price) / fair_price × 11)`.
 
 The fair price comes from a **Stacked Ensemble** (blended `HistGradientBoostingRegressor` + `KNeighborsRegressor` + `Ridge` regression, or standard `HistGradientBoostingRegressor` fallback for the global model) trained on broad market data for each target vehicle. Features: year, log-transformed mileage (`log1p(mileage)`), trim premium (dollar premium relative to base trim MSRP), drivetrain (FWD/AWD), powertrain (gas/hybrid/PHEV), and CPO status.
 

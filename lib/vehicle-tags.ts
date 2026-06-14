@@ -114,8 +114,17 @@ export function getPowertrainTag(trim: string | null, model: string | null): "hy
 export const SIGMOID_COEFF = 11.0;
 
 /** Calculate value score (0-100) from price and fair price using the pipeline's sigmoid function. */
-export function getValueScore(price: number | null, fairPrice: number | null): number | null {
+export function getValueScore(
+  price: number | null,
+  fairPrice: number | null,
+  residualStd?: number | null
+): number | null {
   if (!fairPrice || fairPrice <= 0 || !price) return null;
+  if (residualStd && residualStd > 0) {
+    const effectiveStd = Math.max(600.0, residualStd);
+    const z = (fairPrice - price) / effectiveStd;
+    return Math.round(100 / (1 + Math.exp(-z * 0.94)));
+  }
   const spread = (fairPrice - price) / fairPrice;
   return Math.round(100 / (1 + Math.exp(-spread * SIGMOID_COEFF)));
 }

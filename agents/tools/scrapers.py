@@ -496,13 +496,26 @@ async def _scrape_cargurus_search_all_async(
 ) -> list[dict]:
     """Scrape all search-path vehicles with up to 3 parallel browser contexts."""
     delivery     = "false" if local else "true"
-    state_filter = "&shouldFilterByState=true" if local else ""
+    # Explicitly set shouldFilterByState — CarGurus defaults to true when param is absent,
+    # so omitting it silently limits nationwide training scrapes to the local state.
+    state_filter = "&shouldFilterByState=true" if local else "&shouldFilterByState=false"
+    # nonShippableBaseline ensures non-delivery dealers are included in nationwide (training) searches.
+    non_shippable = "" if local else "&nonShippableBaseline=73"
     sem = asyncio.Semaphore(3)
 
     async def _scrape_vehicle(browser, v: dict) -> list[dict]:
         make    = v["make"]
         model   = v["model"]
-        path    = v["cargurus_search_path"]
+        full_path = v["cargurus_search_path"]
+        # For nationwide (training) scrapes, use only the make/model-level path segments
+        # (no trim suffixes) so CarGurus returns all trim variants. Trim filtering happens
+        # post-scrape in _insert via is_trim_allowed_for_training. For local sourcing scrapes
+        # the full trim-specific paths are kept to reduce noise.
+        if not local:
+            segments = [s for s in full_path.split(",") if s.count("/") <= 1]
+            path = ",".join(segments) if segments else full_path
+        else:
+            path = full_path
         eff_min = max(min_year, v.get("min_year", min_year))
         v_max = v.get("max_year")
         if max_year is not None:
@@ -517,6 +530,7 @@ async def _scrape_cargurus_search_all_async(
             f"&vehicleHistoryOptions={_CARGURUS_HISTORY_FILTER}"
             + (f"&endYear={eff_max}" if eff_max else "")
             + state_filter
+            + non_shippable
         )
         listings: list[dict] = []
         seen_ids: set[str]   = set()
@@ -912,5 +926,8 @@ def enrich_listings_from_detail(listings: list[dict]) -> list[dict]:
         if data.get("mileage") is not None and listing.get("mileage") is None:
             listing["mileage"] = data["mileage"]
         if data.get("insights"):
-            listing["insights"] = data["insights"]
+            existing = listing.get("insights") or {}
+            llm = data["insights"]
+            # Merge: scraper-detected CPO (URL path / certified field) takes precedence
+            listing["insights"] = {**llm, "cpo": llm.get("cpo") or existing.get("cpo") or False}
     return listings

@@ -2,7 +2,7 @@
   "vehicles": [
     {
       "make": "Hyundai", "model": "Tucson Hybrid", "cargurus_id": "d3141",
-      "cargurus_search_path": "m28,m28/d3141,m28/d3141/SEL Convenience AWD,m28/d3141/Limited AWD",
+      "cargurus_search_path": "m28,m28/d3141,m28/d3141/SEL Convenience AWD,m28/d3141/N Line AWD,m28/d3141/Limited AWD",
       "trims": ["SEL Convenience", "N Line", "Limited"],
       "training_trims": ["Blue", "SEL", "SEL Convenience", "N Line", "Limited"],
       "min_year": 2025, "trim_max_year": {"N Line": 2025},
@@ -13,15 +13,15 @@
     },
     {
       "make": "Genesis", "model": "GV70", "cargurus_id": "d3163",
-      "cargurus_search_path": "m203/d3163,m203/d3163/2.5T Advanced AWD,m203/d3163/2.5T Advanced Plus AWD,m203/d3163/2.5T Sport Prestige AWD,m203/d3163/2.5T Select AWD,m203/d3163/2.5T Standard AWD",
-      "trims": ["Advanced", "Advanced Plus", "Sport Prestige"],
-      "training_trims": ["Standard", "Select", "Advanced", "Advanced Plus", "Sport Prestige"],
+      "cargurus_search_path": "m203/d3163,m203/d3163/2.5T Advanced AWD,m203/d3163/2.5T Sport Prestige AWD",
+      "trims": ["Advanced", "Sport Prestige"],
+      "training_trims": ["Standard", "Select", "Advanced", "Sport Prestige"],
       "engine_filter": ["2.5T"],
       "min_year": 2023, "max_year": 2025,
       "msrp": {
         "2023": { "2.5T Standard": 42950, "2.5T Select": 47045, "2.5T Advanced": 51295, "2.5T Sport Prestige": 56695, "3.5T Sport": 55470, "3.5T Sport Prestige": 62495 },
-        "2024": { "2.5T Standard": 43950, "2.5T Select": 48045, "2.5T Advanced": 52295, "2.5T Advanced Plus": 53795, "2.5T Sport Prestige": 57945, "3.5T Sport": 56920, "3.5T Sport Prestige": 63995 },
-        "2025": { "2.5T Standard": 44450, "2.5T Select": 48545, "2.5T Advanced": 52995, "2.5T Advanced Plus": 54595, "2.5T Sport Prestige": 58945, "3.5T Sport": 57920, "3.5T Sport Prestige": 65195 }
+        "2024": { "2.5T Standard": 43950, "2.5T Select": 48045, "2.5T Advanced": 52295, "2.5T Sport Prestige": 57945, "3.5T Sport": 56920, "3.5T Sport Prestige": 63995 },
+        "2025": { "2.5T Standard": 44450, "2.5T Select": 48545, "2.5T Advanced": 52995, "2.5T Sport Prestige": 58945, "3.5T Sport": 57920, "3.5T Sport Prestige": 65195 }
       }
     },
     {
@@ -50,7 +50,7 @@
     },
     {
       "make": "Volkswagen", "model": "Tiguan", "cargurus_id": "d1104",
-      "cargurus_search_path": "m55/d1104,m55,m55/d1104/SE R-Line Black 4Motion,m55/d1104/SE R-Line Black FWD,m55/d1104/SEL R-Line 4Motion,m55/d1104/SEL R-Line Turbo 4Motion",
+      "cargurus_search_path": "m55/d1104,m55,m55/d1104/SE FWD,m55/d1104/SE 4Motion,m55/d1104/SE R-Line Black 4Motion,m55/d1104/SE R-Line Black FWD,m55/d1104/SEL R-Line 4Motion,m55/d1104/SEL R-Line Turbo 4Motion",
       "trims": ["SE", "SEL R-Line", "SE R-Line Black"],
       "training_trims": ["S", "SE", "SE R-Line Black", "SEL R-Line"],
       "min_year": 2025,
@@ -153,7 +153,7 @@
     },
     {
       "make": "Lexus", "model": "NX 350h", "cargurus_id": "d2294",
-      "cargurus_search_path": "m37,m37/d2294,m37/d2294/350h Premium AWD,m37/d2294/350h Luxury AWD,m37/d2294/350h Signature AWD",
+      "cargurus_search_path": "m37,m37/d2294,m37/d2294/350h AWD,m37/d2294/350h Premium AWD,m37/d2294/350h Luxury AWD,m37/d2294/350h F SPORT Handling AWD",
       "trims": ["Premium", "Luxury", "F SPORT"],
       "min_year": 2022, "max_year": 2024,
       "msrp": {

@@ -26,7 +26,13 @@ sys.stdout.reconfigure(line_buffering=True)
 
 from tools.log_tee import enable_log_tee
 from tools.db import execute, fetch_one, refresh_self_computed_medians
-from tools.base_trims import get_allowed_makes, get_allowed_models, get_vehicles, _norm, is_trim_allowed, is_trim_allowed_for_training, canonical_trim, get_model_min_year, get_model_max_year, split_xc60_model, split_cx50_model
+from tools.base_trims import get_allowed_makes, get_allowed_models, get_vehicles, _norm, is_trim_allowed, is_trim_allowed_for_training, canonical_trim, get_model_min_year, get_model_max_year, split_xc60_model, split_cx50_model, _VEHICLES
+
+# Canonical make/model names from cars.json — used to normalise scraper-specific casing
+_CANONICAL_NAMES = {
+    (v["make"].lower(), v["model"].lower()): (v["make"], v["model"])
+    for v in _VEHICLES
+}
 from tools.scoring import detect_powertrain, detect_drivetrain
 from tools.price_model import _drivetrain_for
 from tools.scrapers import scrape_cargurus, scrape_carvana, scrape_carscom, scrape_carmax
@@ -34,8 +40,8 @@ from tools.dealer_scraper import scrape_all_dealers
 from tools.job_tracker import start_job, update_job, complete_job
 from tools.price_model import _PLATFORM_MIN_YEAR, _is_cpo
 
-ZIP         = "30328"   # anchor zip (CarGurus requires one; 2500 mi = continental US)
-RADIUS      = 2500      # nationwide
+ZIP         = "30328"   # anchor zip (CarGurus requires one)
+RADIUS      = 50000     # nationwide (CarGurus treats large values as no-distance-limit)
 MAX_YEAR    = datetime.now().year
 _CURR_YEAR  = datetime.now().year
 
@@ -101,6 +107,10 @@ def _insert(rows: list[dict], allowed_norm: set[str], min_year: int | None = Non
         source = l.get("source", "cargurus")
         if not all([make, model, year, price]):
             continue
+        # Normalise make/model to canonical casing from cars.json (scrapers use ALL CAPS, title case, etc.)
+        canonical = _CANONICAL_NAMES.get((make.lower(), model.lower()))
+        if canonical:
+            make, model = canonical
         # Check allowlist — treat "xc60recharge" as "xc60", and "cx50" as "cx50hybrid" since they share pages
         check_norm = _norm(model)
         if check_norm == "xc60recharge":

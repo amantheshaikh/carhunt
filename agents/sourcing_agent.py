@@ -253,7 +253,10 @@ def _save_new(listing: dict) -> None:
                    WHERE vin = %s AND vin IS NOT NULL
                    AND status NOT IN ('dismissed', 'purchased')
                )
-               ON CONFLICT (source, external_id) DO NOTHING""",
+               ON CONFLICT (source, external_id) DO UPDATE SET
+                   trim = EXCLUDED.trim,
+                   dealer_name = EXCLUDED.dealer_name,
+                   insights = COALESCE(EXCLUDED.insights, listings.insights)""",
             (
                 listing["source"], str(listing["external_id"]), listing.get("vin"),
                 mk, mo, trim, listing["year"],
@@ -274,19 +277,22 @@ def _save_new(listing: dict) -> None:
 def _touch_existing(source: str, external_id: str, new_price: int, old_price: int) -> bool:
     """Update last_seen_at and price atomically. Returns True if price changed."""
     price_changed = new_price != old_price
-    with get_conn() as conn:
-        with conn.cursor() as cur:
-            cur.execute(
-                "UPDATE listings SET last_seen_at = now(), price = %s WHERE source = %s AND external_id = %s",
-                (new_price, source, external_id),
-            )
-            if price_changed:
+    conn = get_conn()
+    try:
+        with conn:
+            with conn.cursor() as cur:
                 cur.execute(
-                    "DELETE FROM listing_scores WHERE listing_id = "
-                    "(SELECT id FROM listings WHERE source=%s AND external_id=%s)",
-                    (source, external_id),
+                    "UPDATE listings SET last_seen_at = now(), price = %s WHERE source = %s AND external_id = %s",
+                    (new_price, source, external_id),
                 )
-        conn.commit()
+                if price_changed:
+                    cur.execute(
+                        "DELETE FROM listing_scores WHERE listing_id = "
+                        "(SELECT id FROM listings WHERE source=%s AND external_id=%s)",
+                        (source, external_id),
+                    )
+    finally:
+        conn.close()
     return price_changed
 
 
@@ -386,17 +392,21 @@ def process_source(
         else:
             existing.append((source, ext_id, listing["price"], known[ext_id]))
 
-    # Pass 2: enrich new candidates with detail-page history data.
-    # Only CarGurus and Cars.com require enrichment — their listing pages don't
-    # surface accident/title data, so the detail page is the only source of truth.
-    # CarMax, Carvana, and dealer sources already set these fields from their
-    # own scrapers; fetching detail pages for them adds latency with no benefit.
+    # Pass 2: enrich new candidates with detail-page data.
+    # Required sources (cargurus, carscom): accident/title come only from the detail page,
+    # so we reset them here and reject any listing that times out or fails to enrich.
+    # Optional sources (dealer): scrapers already set accident=0/title=clean; enrichment
+    # is best-effort to extract LLM insights (CPO, packages, price_drop, owner_notes).
+    # CarMax and Carvana carry full history data from their own scrapers — no enrichment needed.
     _ENRICHMENT_REQUIRED = {"cargurus", "carscom"}
-    if candidates and source in _ENRICHMENT_REQUIRED:
-        for listing in candidates:
-            listing["accident_count"] = None
-            listing["title_status"] = None
-        print(f"  [{source}] Fetching history for {len(candidates)} new listing(s)...", flush=True)
+    _ENRICHMENT_OPTIONAL = {"dealer"}
+    if candidates and source in (_ENRICHMENT_REQUIRED | _ENRICHMENT_OPTIONAL):
+        if source in _ENRICHMENT_REQUIRED:
+            for listing in candidates:
+                listing["accident_count"] = None
+                listing["title_status"] = None
+        label = "history" if source in _ENRICHMENT_REQUIRED else "insights"
+        print(f"  [{source}] Fetching {label} for {len(candidates)} new listing(s)...", flush=True)
         candidates = enrich_listings_from_detail(candidates)
 
     # Pass 3: save/update
@@ -498,6 +508,7 @@ def run(run_id: str = "", force: bool = False) -> dict:
         known_dealer = _get_known_ids("dealer")
         known_dealer_price_fps, known_dealer_dfps = _get_known_fingerprints("dealer")
         dealer_total = dealer_new = dealer_skipped = 0
+        new_dealer_listings = []
         try:
             for listing in scrape_all_dealers(makes, min_year, max_year, force=_FORCE_MODE):
                 dealer_total += 1
@@ -522,17 +533,29 @@ def run(run_id: str = "", force: bool = False) -> dict:
                     continue
                 ext_id = str(listing["external_id"])
                 if ext_id not in known_dealer:
+                    new_dealer_listings.append(listing)
+                else:
+                    _touch_existing("dealer", ext_id, listing["price"], known_dealer[ext_id])
+
+            if new_dealer_listings:
+                print(f"  [dealer] Fetching VDP insights for {len(new_dealer_listings)} new listing(s)...", flush=True)
+                new_dealer_listings = enrich_listings_from_detail(new_dealer_listings)
+                for listing in new_dealer_listings:
+                    vin = listing.get("vin")
+                    url = listing.get("listing_url", "")
+                    fp = (listing.get("year"), listing.get("mileage"), listing.get("price"))
+                    dfp = (listing.get("dealer_name"), listing.get("make"), listing.get("model"), listing.get("year"), listing.get("mileage"))
+                    ext_id = str(listing["external_id"])
+                    
                     _save_new(listing)
                     known_dealer[ext_id] = listing["price"]
                     if vin: shared_known_vins.add(vin)
-                    shared_known_urls.add(url)
+                    if url: shared_known_urls.add(url)
                     if all(v is not None for v in fp):
                         known_dealer_price_fps.add(fp)
                     if all(v is not None for v in dfp):
                         known_dealer_dfps.add(dfp)
                     dealer_new += 1
-                else:
-                    _touch_existing("dealer", ext_id, listing["price"], known_dealer[ext_id])
             source_results[DEALER_SOURCE] = dealer_total
             print(f"  [dealer] {dealer_new} new, {dealer_skipped} filtered from {dealer_total} raw", flush=True)
         except Exception as e:

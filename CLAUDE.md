@@ -92,7 +92,7 @@ carhunt/
 
 **3-pass ingestion:**
 - **Pass 1** — Filter candidates: `_is_valid()` + VIN dedup + URL dedup + fingerprint dedup
-- **Pass 2** — Detail page enrichment: fetches each new listing's page to extract accident count, title status, owner count, and LLM qualitative insights. **Only runs for CarGurus and Cars.com** — CarMax, Carvana, and dealer sources set these fields directly in their scrapers.
+- **Pass 2** — Detail page enrichment: fetches each new listing's page to extract accident count, title status, owner count, and LLM qualitative insights. **Runs for CarGurus, Cars.com, and local dealer sources** (which are enriched optionally to extract packages/CPO from VDP pages). CarMax and Carvana set these fields directly in their scrapers.
 - **Pass 3** — Re-validate only accident/title fields (the rest already passed Pass 1), save or skip
 
 **Validation gates** (`_is_valid`):
@@ -114,7 +114,7 @@ Returns `(price_fps, dealer_fps)` where:
 - All models use the new `/search?srpVariation=DEFAULT_SEARCH` format via `cargurus_search_path`
 - `vehicleHistoryOptions=CLEAN_TITLE,LEMON_FREE,NON_SALVAGE,NON_FLEET,NO_THEFT_HISTORY,UNDAMAGED_FRAME`
 - Sourcing: `isDeliveryEnabled=false`, `shouldFilterByState=true`, `distance=100`
-- Training: `isDeliveryEnabled=true`, no state filter, `distance=2500` (nationwide)
+- Training: `isDeliveryEnabled=true`, `shouldFilterByState=false`, `nonShippableBaseline=73`, `distance=50000` (nationwide — large value treated as no distance limit)
 - All models share ONE browser session per scrape run
 - Pagination: `&page=N`, page size detected dynamically, up to 100 pages
 
@@ -130,13 +130,18 @@ Returns `(price_fps, dealer_fps)` where:
 
 ## Scoring & Deal Categories
 
-**Score = sigmoid((ML_fair_price − listing_price) / ML_fair_price × 11)**
+**Per-model std normalization (primary):** `Score = sigmoid((ML_fair_price − listing_price) / residual_std × 0.94)`
+where `residual_std` is the OOF residual std dev stored in the per-model pickle. k=0.94 calibrates so 1σ below fair ≈ 72 (Great Deal), 2σ ≈ 88 (Exceptional Deal).
+
+**Global model fallback:** `Score = sigmoid((ML_fair_price − listing_price) / ML_fair_price × 11)` (percentage-based, used when `residual_std = 0`).
+
+This means the same dollar discount is worth more for tightly-priced models (low std) than wide-spread ones.
 
 | Score | Deal Category | Meaning |
 |---|---|---|
-| 88+ | Exceptional Deal | ~18%+ below fair value |
-| 72–88 | Great Deal | ~10–18% below fair value |
-| 58–72 | Good Deal | ~5–10% below fair value |
+| 88+ | Exceptional Deal | ~2σ+ below fair value |
+| 72–88 | Great Deal | ~1–2σ below fair value |
+| 58–72 | Good Deal | ~0.5–1σ below fair value |
 | 45–58 | Fair Price | Near fair value |
 | < 40 | Poor Value | Overpriced relative to fair value |
 
@@ -249,7 +254,7 @@ Type `/retrain` in Claude Code to run a broad market sweep and retrain the model
 | File | When to change |
 |---|---|
 | `agents/cars.json` | Add/remove models, change trims, update CarGurus IDs or search paths |
-| `agents/tools/scoring.py` | Adjust sigmoid steepness (currently 11×), drivetrain/powertrain detection keywords |
+| `agents/tools/scoring.py` | Sigmoid formula (k=0.94 for per-model std, k=11 for global fallback), drivetrain/powertrain detection keywords |
 | `agents/analysis_agent.py` | Stacked ensemble scoring — `listing_scores` |
 | `agents/tools/price_model.py` | Stacked ensemble, MSRP-based trim_premium, CPO feature, drivetrain overrides, platform min-years |
 | `agents/tools/scrapers.py` | CarGurus format, pagination, anti-detection, LLM insight extraction |
@@ -352,9 +357,10 @@ PROXY_URL=...                   # optional: http://user:pass@host:port for resid
 - **Status system:** `new` → `active` → `contacted` → `purchased`. `dismissed` = user-removed. Listings are **never** auto-dismissed by score or missed scrapes.
 - **No auto-sold:** Scraper never marks listings as sold. User controls this via "Mark Expired".
 - **Mileage validation is rate-based:** `mileage / years_old > 14,000` → reject. Hard ceiling (`max_mileage`) set to 999999 in `run()` so no cap at the scraper URL level.
-- **Detail-page enrichment** runs concurrently (3 pages at a time) with a 10-minute total session cap. Only CarGurus and Cars.com require enrichment. LLM insight extraction runs in a background thread per listing (timeout=15s).
+- **Detail-page enrichment** runs concurrently (3 pages at a time) with a 10-minute total session cap. CarGurus and Cars.com require enrichment for history parsing, while dealer sites optionally run enrichment for qualitative insights. LLM insight extraction runs in a background thread per listing (timeout=15s).
 - **CarGurus new search format** uses `data-testid="srp-listing-tile"` DOM elements; `_dismiss_cargurus_modal()` handles the "Only show GA listings?" modal.
-- **Canonical trim normalization** — 4-pass (prefix → BMW token-reorder → whole-word substring → LLM). Engine prefix regex strips "350h ", "2.0T " etc. before matching.
+- **Canonical trim normalization** — 4-pass (prefix → BMW token-reorder → whole-word substring → LLM). Engine prefix regex strips "350h ", "2.0T " etc. before matching. To prevent ingestion failures, `is_trim_allowed` also supports Pass 2 (BMW token-reorder).
+- **Title parsing LLM fallback** — `_parse_title` in `dealer_scraper.py` falls back to a cached LLM title parser (`deepseek-v4-flash` via OpenRouter) when standard regex/substring matching fails to resolve a valid make/model. Cache stored in `.title_cache.json`. Uses a strict prompt format (`{"matched": false}`) to prevent force-mapping non-target vehicles.
 - **Dealer scraping is parallelized** — 5 sites concurrently via `ThreadPoolExecutor(max_workers=5)`. Cobalt sites have 150s timeout (paginate via "Next" button, 2.5s each); others 90s.
 - **`_add_used` coerce** uses `_int()` for price/mileage/year — handles decimal strings via `int(float(...))` to avoid stripping the decimal point into a 100x inflated value.
 - **dealerinspire_algolia year filter:** Some indexes store year as a string; Algolia numeric range filters silently return 0. Year range removed from Algolia query; filtered by `_add_used` post-scrape with `int()` cast.
