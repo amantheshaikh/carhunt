@@ -92,3 +92,39 @@ def test_score_is_float_in_range():
     score = score_listing(28_000, 30_000)
     assert isinstance(score, float)
     assert 0 <= score <= 100
+
+def test_score_with_residual_std_cap():
+    # residual_std = 1000 (> 600)
+    score = score_listing(27_000, 30_000, 1000.0)
+    assert score is not None
+    assert isinstance(score, float)
+    assert score == 94.4  # round(100.0 / (1.0 + math.exp(-3.0 * 0.94)), 1) -> 94.4
+    
+    # residual_std = 500 (< 600), should be capped at 600.0
+    score_500 = score_listing(27_000, 30_000, 500.0)
+    score_600 = score_listing(27_000, 30_000, 600.0)
+    assert score_500 == score_600
+    assert score_500 == 99.1  # round(100.0 / (1.0 + math.exp(-5.0 * 0.94)), 1) -> 99.1
+
+def test_drivetrain_extra_keywords():
+    assert detect_drivetrain("X3 M40i", None) == "awd"
+    assert detect_drivetrain("X1 M35i", None) == "awd"
+    assert detect_drivetrain("quattro Premium", None) == "awd"
+    assert detect_drivetrain("GLC 4matic", None) == "awd"
+    assert detect_drivetrain("XC60 T6 B6", None) == "awd"
+    assert detect_drivetrain("XC60 eAWD", None) == "awd"
+    
+    assert detect_drivetrain("X3 sDrive30i", None) == "fwd"
+    assert detect_drivetrain("XC40 B4", None) == "fwd"
+    assert detect_drivetrain("3 Series RWD", None) == "fwd"
+    assert detect_drivetrain("2WD SE", None) == "fwd"
+
+def test_powertrain_extra_keywords():
+    assert detect_powertrain("XC90 T8 Recharge", None) == "phev"
+    assert detect_powertrain("plug in hybrid SE", None) == "phev"
+    
+    assert detect_powertrain("RX 350h", None) == "hybrid"
+    assert detect_powertrain("RX 500h F Sport", None) == "hybrid"
+    
+    assert detect_powertrain("Model Y BEV", None) == "electric"
+
