@@ -184,12 +184,16 @@ def _trim_premium(row: dict) -> float:
             key_has_awd = any(k in key_lower for k in ("awd", "4motion", "4x4", "xdrive"))
             key_has_fwd = any(k in key_lower for k in ("fwd", "sdrive", "2wd"))
             
-            if dt_is_awd and key_has_awd:
-                score += 5
+            # Prefer neutral keys (no drivetrain qualifier) so trim_premium
+            # encodes only trim identity. The separate drivetrain feature
+            # carries the FWD/AWD price delta — encoding it in trim_premium
+            # too would double-count the AWD premium (e.g. Tiguan SE vs SE AWD).
+            if not key_has_awd and not key_has_fwd:
+                score += 5  # neutral key — preferred
+            elif dt_is_awd and key_has_awd:
+                score += 2  # drivetrain-specific key — fallback only
             elif not dt_is_awd and key_has_fwd:
-                score += 5
-            elif not key_has_awd and not key_has_fwd:
-                score += 2
+                score += 2  # drivetrain-specific key — fallback only
                 
             common_len = min(len(canon_norm), len(key_norm))
             score += common_len
