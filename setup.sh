@@ -10,11 +10,12 @@ cd agents
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -r ../requirements.txt --quiet
+playwright install chromium
 cd ..
 
 echo ""
 echo "Setup complete. Next steps:"
-echo "  1. Fill in .env.local with your ANTHROPIC_API_KEY and BROWSE_AI keys"
+echo "  1. Fill in .env.local with your OPENROUTER_API_KEY (see .env.example)"
 echo "  2. Run: npm run dev"
 echo "  3. Visit: http://localhost:3000"
 echo ""

@@ -31,3 +31,5 @@ tsconfig.tsbuildinfo
 .title_cache.json
 .pytest_cache/
 .claude/
+tunnel.sh
+tunnel-url.txt
