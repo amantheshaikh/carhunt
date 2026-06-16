@@ -469,6 +469,7 @@ def scrape_cargurus(zip_code, makes, max_price, max_mileage, min_year, radius=10
         return []
     return _run(_scrape_cargurus_search_all_async(
         search_path_vehicles, zip_code, min_year, max_year, radius=radius, local=local,
+        clean_history=clean_history,
     ))
 
 
@@ -492,7 +493,7 @@ async def _dismiss_cargurus_modal(page) -> None:
 
 async def _scrape_cargurus_search_all_async(
     vehicles: list[dict], zip_code: str, min_year: int, max_year: int | None,
-    radius: int = 50000, local: bool = False,
+    radius: int = 50000, local: bool = False, clean_history: bool = False,
 ) -> list[dict]:
     """Scrape all search-path vehicles with up to 3 parallel browser contexts."""
     delivery     = "false" if local else "true"
@@ -501,6 +502,9 @@ async def _scrape_cargurus_search_all_async(
     state_filter = "&shouldFilterByState=true" if local else "&shouldFilterByState=false"
     # nonShippableBaseline ensures non-delivery dealers are included in nationwide (training) searches.
     non_shippable = "" if local else "&nonShippableBaseline=73"
+    history_opts = _CARGURUS_HISTORY_FILTER
+    if clean_history:
+        history_opts += ",NO_ACCIDENTS"
     sem = asyncio.Semaphore(3)
 
     async def _scrape_vehicle(browser, v: dict) -> list[dict]:
@@ -527,7 +531,7 @@ async def _scrape_cargurus_search_all_async(
             f"&zip={zip_code}&distance={radius}"
             f"&makeModelTrimPaths={urllib.parse.quote(path, safe='/')}"
             f"&isDeliveryEnabled={delivery}&startYear={eff_min}"
-            f"&vehicleHistoryOptions={_CARGURUS_HISTORY_FILTER}"
+            f"&vehicleHistoryOptions={history_opts}"
             + (f"&endYear={eff_max}" if eff_max else "")
             + state_filter
             + non_shippable
@@ -823,53 +827,83 @@ def _focus_listing_text(text: str, limit: int = 1500) -> str:
     return text[:limit]
 
 
-def _extract_insights_llm(text: str) -> dict:
+def _extract_insights_llm(text: str, allowed_trims: list[str] | None = None) -> dict:
     """Call LLM to extract qualitative insights from a listing detail page.
-    Returns: {cpo, packages, price_drop, owner_notes}
+    Returns: {cpo, packages, price_drop, owner_notes} + optional {trim}.
+
+    When allowed_trims is provided, the LLM is asked to match the trim to one
+    of those exact strings. The result is validated post-LLM: any returned trim
+    that isn't literally in allowed_trims is discarded before returning.
     """
     client = _get_llm_client()
     if client is None:
         return {}
     try:
-        excerpt = _focus_listing_text(text)
+        insights_excerpt = _focus_listing_text(text)
+
+        if allowed_trims:
+            trims_str = ", ".join(f'"{t}"' for t in allowed_trims)
+            trim_field = ',"trim":str|null'
+            trim_instruction = (
+                f'trim: from the vehicle title/header match to EXACTLY one of: {trims_str}. '
+                f'Return the verbatim string from that list, or null if not clearly present. '
+            )
+            # Prepend the top of the page so the listing title is always in context
+            title_text = text[:800].strip()
+            full_excerpt = f"{title_text}\n---\n{insights_excerpt}"
+        else:
+            trim_field = ""
+            trim_instruction = ""
+            full_excerpt = insights_excerpt
+
         prompt = (
-            'Return JSON only: {"cpo":bool,"packages":[str],"price_drop":int|null,"owner_notes":str|null}\n'
+            f'Return JSON only: {{"cpo":bool,"packages":[str],"price_drop":int|null,"owner_notes":str|null{trim_field}}}\n'
             "cpo=true only if explicitly CPO/Certified Pre-Owned. "
             "packages=named option packages (empty array if none). "
             "price_drop=dollar reduction if stated. "
             "owner_notes=short string for notable condition/history (null if none). "
+            f"{trim_instruction}"
             "Only explicit facts, no inference.\n\n"
-            f"{excerpt}"
+            f"{full_excerpt}"
         )
         resp = client.chat.completions.create(
             model="deepseek/deepseek-v4-flash",
             messages=[{"role": "user", "content": prompt}],
-            max_tokens=120,
+            max_tokens=150,
             timeout=15,
             response_format={"type": "json_object"},
         )
         raw = resp.choices[0].message.content or "{}"
         data = json.loads(raw)
-        return {
+        result = {
             "cpo":         bool(data.get("cpo", False)),
             "packages":    [str(p) for p in (data.get("packages") or [])],
             "price_drop":  int(data["price_drop"]) if data.get("price_drop") else None,
             "owner_notes": str(data["owner_notes"])[:80] if data.get("owner_notes") else None,
         }
+        # Hard guardrail: only accept the trim if it's literally in the allowed list.
+        # This prevents the LLM from inventing or abbreviating a trim name.
+        if allowed_trims and data.get("trim"):
+            allowed_lower = {t.lower(): t for t in allowed_trims}
+            validated = allowed_lower.get(str(data["trim"]).lower())
+            if validated:
+                result["trim"] = validated
+        return result
     except Exception as e:
         print(f"    [insights] LLM extraction failed: {e}", flush=True)
         return {}
 
 
-async def _enrich_detail_async(pairs: list[tuple[str, str]], results: dict) -> None:
+async def _enrich_detail_async(pairs: list[tuple[str, str, list[str] | None]], results: dict) -> None:
     """Fetch detail pages concurrently (up to _ENRICH_CONCURRENCY at a time).
 
     Writes into the caller-supplied `results` dict so partial data survives
     an asyncio.TimeoutError cancellation from the outer wait_for wrapper.
+    pairs: (ext_id, url, allowed_trims) — allowed_trims passed to LLM for trim correction.
     """
     sem = asyncio.Semaphore(_ENRICH_CONCURRENCY)
 
-    async def _fetch_one(ctx, ext_id: str, url: str) -> None:
+    async def _fetch_one(ctx, ext_id: str, url: str, allowed_trims: list[str] | None) -> None:
         async with sem:
             page = await ctx.new_page()
             try:
@@ -877,14 +911,14 @@ async def _enrich_detail_async(pairs: list[tuple[str, str]], results: dict) -> N
                 await page.wait_for_timeout(2_000)
                 text = await page.evaluate("() => document.body.innerText")
                 data = _parse_history(text)
-                # Run LLM insight extraction in a thread so it doesn't block the event loop
-                insights = await asyncio.to_thread(_extract_insights_llm, text)
+                insights = await asyncio.to_thread(_extract_insights_llm, text, allowed_trims)
                 data["insights"] = insights
                 results[ext_id] = data
+                trim_note = f" trim={insights['trim']!r}" if insights.get("trim") else ""
                 print(f"    [{ext_id}] accidents={data['accident_count']} "
                       f"title={data['title_status']} owners={data['owner_count']} "
                       f"mileage={data['mileage']}"
-                      + (f" cpo={insights.get('cpo')} pkgs={len(insights.get('packages',[]))}" if insights else ""),
+                      + (f" cpo={insights.get('cpo')} pkgs={len(insights.get('packages',[]))}{trim_note}" if insights else ""),
                       flush=True)
             except Exception as e:
                 print(f"    [{ext_id}] detail fetch error: {e}", flush=True)
@@ -894,15 +928,22 @@ async def _enrich_detail_async(pairs: list[tuple[str, str]], results: dict) -> N
     async with Stealth().use_async(async_playwright()) as p:
         browser, ctx = await _stealth_browser(p)
         try:
-            await asyncio.gather(*[_fetch_one(ctx, ext_id, url) for ext_id, url in pairs])
+            await asyncio.gather(*[_fetch_one(ctx, ext_id, url, allowed_trims) for ext_id, url, allowed_trims in pairs])
         finally:
             await browser.close()
 
 
 def enrich_listings_from_detail(listings: list[dict]) -> list[dict]:
     """Fetch detail pages for new listings and enrich with vehicle history data."""
+    from tools.base_trims import _find_vehicle, is_trim_allowed
+
+    def _allowed_trims(make: str, model: str) -> list[str] | None:
+        v = _find_vehicle(make, model)
+        return v.get("trims") if v else None
+
     pairs = [
-        (str(listing["external_id"]), listing["listing_url"])
+        (str(listing["external_id"]), listing["listing_url"],
+         _allowed_trims(listing.get("make", ""), listing.get("model", "")))
         for listing in listings if listing.get("listing_url")
     ]
     if not pairs:
@@ -930,4 +971,15 @@ def enrich_listings_from_detail(listings: list[dict]) -> list[dict]:
             llm = data["insights"]
             # Merge: scraper-detected CPO (URL path / certified field) takes precedence
             listing["insights"] = {**llm, "cpo": llm.get("cpo") or existing.get("cpo") or False}
+            # Trim correction: only override when the current trim is absent or fails the
+            # allowlist check. Never overwrite a trim that already passed validation —
+            # the scraper's structured data is more reliable than LLM for correct trims.
+            detail_trim = llm.get("trim")
+            if detail_trim:
+                make = listing.get("make", "")
+                model = listing.get("model", "")
+                current_trim = listing.get("trim")
+                if not current_trim or not is_trim_allowed(make, model, current_trim):
+                    listing["trim"] = detail_trim
+                    print(f"    [enrich:trim] {make} {model}: {current_trim!r} → {detail_trim!r}", flush=True)
     return listings

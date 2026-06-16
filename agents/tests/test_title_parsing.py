@@ -51,8 +51,8 @@ def test_title_cache_prevents_duplicate_calls(monkeypatch):
     monkeypatch.setattr(ds, "_parse_title_llm", mock_llm)
     monkeypatch.setattr(ds, "_llm_title_cache", {})
 
-    res1 = _parse_title("Messy Title A")
-    res2 = _parse_title("Messy Title A")
+    res1 = _parse_title("GV70 Messy Title A")
+    res2 = _parse_title("GV70 Messy Title A")
 
     assert res1 == ("2025", "Genesis", "GV70", "Advanced")
     assert res2 == ("2025", "Genesis", "GV70", "Advanced")
