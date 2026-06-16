@@ -123,7 +123,8 @@ carhunt/
 │       ├── scoring.py          # score_listing() + drivetrain/powertrain detection
 │       ├── price_model.py      # Stacked ensemble fair-price estimator (GB + KNN + Ridge)
 │       ├── base_trims.py       # Trim allowlist + canonical_trim normalization (LLM fallback)
-│       └── log_tee.py          # stdout/stderr tee → /tmp/carhunt-refresh.log
+│       ├── log_tee.py          # stdout/stderr tee → /tmp/carhunt-refresh.log
+│       └── job_tracker.py      # Job progress tracking for dashboard SSE stream
 ├── db/
 │   └── schema.sql              # PostgreSQL schema
 ├── docker-compose.yml          # PostgreSQL container
@@ -141,6 +142,8 @@ If no per-model standard deviation is available, it falls back to the percentage
 `sigmoid((fair_price − listing_price) / fair_price × 11)`.
 
 The fair price comes from a **Stacked Ensemble** (blended `HistGradientBoostingRegressor` + `KNeighborsRegressor` + `Ridge` regression, or standard `HistGradientBoostingRegressor` fallback for the global model) trained on broad market data for each target vehicle. Features: year, log-transformed mileage (`log1p(mileage)`), trim premium (dollar premium relative to base trim MSRP), drivetrain (FWD/AWD), powertrain (gas/hybrid/PHEV), and CPO status.
+
+Drivetrain is resolved in priority order: trim-level override → model/year override → keyword detection from listing text and URL slug (hyphens converted to spaces, so `/tiguan-2-0t-se-fwd/` correctly yields FWD).
 
 | Score | Category |
 |---|---|

@@ -178,6 +178,8 @@ Score < 40 is a display category only — listings are **never** auto-dismissed 
 - `" b6 "` → AWD standard
 - `" b4 "` → FWD only
 
+`_drivetrain_for()` in `price_model.py` (and `training_collector._insert`) also appends the listing URL slug (hyphens and slashes replaced with spaces) to the raw text before calling `detect_drivetrain`. This catches FWD/AWD encoded in dealer URL paths when the raw listing text doesn't include a drivetrain keyword.
+
 **Powertrain detection** (`scoring.py`) — space-padded keyword-based (handles boundaries):
 - `recharge`, `plug-in`, `phev`, `" t8 "` → PHEV (1.0)
 - `hybrid`, `350h`, `400h`, `500h` → Hybrid (0.8)
@@ -200,7 +202,9 @@ During detail-page enrichment (Pass 2), an LLM call extracts qualitative signals
 - **Price drop** — dollar amount if a reduction is mentioned
 - **Owner notes** — short string for notable condition info (e.g. "1-owner, all service records")
 
-Stored in the `insights` JSONB column on `listings`. Uses `deepseek/deepseek-v4-flash` via OpenRouter. Only populated for new CarGurus/Cars.com listings. Input text is pre-processed via `_focus_listing_text()` — collapses whitespace, anchors on the first keyword-relevant section, capped at 1500 chars.
+Stored in the `insights` JSONB column on `listings`. Uses `deepseek/deepseek-v4-flash` via OpenRouter. Populated for new CarGurus, Cars.com, and dealer listings. Input text is pre-processed via `_focus_listing_text()` — collapses whitespace, builds a window covering all keyword matches (first match −200 chars to last match +2000 chars), with a fallback to the last-match anchor when the span exceeds 4000 chars.
+
+**Trim correction** — when `allowed_trims` is provided, the LLM is also asked to identify the trim from the allowlist. The result is hard-validated post-LLM (case-insensitive exact match against `cars.json` trims); any value that doesn't match is discarded. Trim correction only fires when the listing's current trim is `None` or fails `is_trim_allowed`.
 
 ---
 
@@ -360,7 +364,7 @@ PROXY_URL=...                   # optional: http://user:pass@host:port for resid
 - **Detail-page enrichment** runs concurrently (3 pages at a time) with a 10-minute total session cap. CarGurus and Cars.com require enrichment for history parsing, while dealer sites optionally run enrichment for qualitative insights. LLM insight extraction runs in a background thread per listing (timeout=15s).
 - **CarGurus new search format** uses `data-testid="srp-listing-tile"` DOM elements; `_dismiss_cargurus_modal()` handles the "Only show GA listings?" modal.
 - **Canonical trim normalization** — 4-pass (prefix → BMW token-reorder → whole-word substring → LLM). Engine prefix regex strips "350h ", "2.0T " etc. before matching. To prevent ingestion failures, `is_trim_allowed` also supports Pass 2 (BMW token-reorder).
-- **Title parsing LLM fallback** — `_parse_title` in `dealer_scraper.py` falls back to a cached LLM title parser (`deepseek-v4-flash` via OpenRouter) when standard regex/substring matching fails to resolve a valid make/model. Cache stored in `.title_cache.json`. Uses a strict prompt format (`{"matched": false}`) to prevent force-mapping non-target vehicles.
+- **Title parsing LLM fallback** — `_parse_title` in `dealer_scraper.py` falls back to a cached LLM title parser (`deepseek-v4-flash` via OpenRouter) when standard regex/substring matching fails to resolve a valid make/model. Cache stored in `.title_cache.json`. Uses a strict prompt format (`{"matched": false}`) to prevent force-mapping non-target vehicles. `_llm_model_valid_for_title()` post-validates every LLM result: (1) if the matched model has a powertrain qualifier (Hybrid/PHEV/Recharge), the source title must contain one too; (2) all non-powertrain words in the model name must appear in the title. This prevents cross-variant false positives (e.g. "Elantra Hybrid" title → "Tucson Hybrid" match).
 - **Dealer scraping is parallelized** — 5 sites concurrently via `ThreadPoolExecutor(max_workers=5)`. Cobalt sites have 150s timeout (paginate via "Next" button, 2.5s each); others 90s.
 - **`_add_used` coerce** uses `_int()` for price/mileage/year — handles decimal strings via `int(float(...))` to avoid stripping the decimal point into a 100x inflated value.
 - **dealerinspire_algolia year filter:** Some indexes store year as a string; Algolia numeric range filters silently return 0. Year range removed from Algolia query; filtered by `_add_used` post-scrape with `int()` cast.
@@ -374,5 +378,5 @@ PROXY_URL=...                   # optional: http://user:pass@host:port for resid
 - **`user_notes`** — `TEXT` column on `listings`; editable via the detail panel textarea and `PATCH /api/listings/:id`. Auto-saves on blur.
 - **Stacked model pickle path** — per-model `StackedModel` dataclass saved as `price_model_{slug}.pkl`; global fallback stays a plain `Pipeline`. `StackedModel.__module__` is forced to `tools.price_model` at definition time to prevent `__main__` pickle namespace issues when training via CLI.
 - **Dedup within a run:** `known_urls`, `known_vins`, `known_price_fps`, `known_dealer_fps` fetched once before the source loop, shared across all sources including dealers.
-- **LLM token optimization:** All LLM calls use module-level shared OpenAI clients. Insight text pre-processed to 1500-char focused window. Output caps: insights=120, trim=30, summary=80, query=500.
+- **LLM token optimization:** All LLM calls use module-level shared OpenAI clients. Insight text pre-processed via `_focus_listing_text()` to a 2000-char focused window. Output caps: insights=150 (raised from 120 to accommodate trim field), trim=30, summary=80, query=500.
 - **Postgres runs in Docker** (`docker compose up -d db`). Schema in `db/schema.sql`.
