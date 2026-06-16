@@ -121,7 +121,9 @@ def _insert(rows: list[dict], allowed_norm: set[str], min_year: int | None = Non
         if check_norm not in allowed_norm:
             continue
 
-        raw_text = (l.get("raw") or {}).get("text") if isinstance(l.get("raw"), dict) else None
+        raw_text_base = (l.get("raw") or {}).get("text") if isinstance(l.get("raw"), dict) else None
+        url_slug = (l.get("listing_url") or "").replace("-", " ").replace("/", " ")
+        raw_text = " ".join(filter(None, [raw_text_base, url_slug])) or None
         # Split models using shared helpers
         model = split_xc60_model(make, model, l.get("trim"))
         model = split_cx50_model(make, model, l.get("trim"), raw_text)

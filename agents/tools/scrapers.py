@@ -810,20 +810,28 @@ _INSIGHTS_KEYWORDS = re.compile(
     re.IGNORECASE,
 )
 
-def _focus_listing_text(text: str, limit: int = 1500) -> str:
+def _focus_listing_text(text: str, limit: int = 2000) -> str:
     """Return a focused excerpt of page innerText for LLM insight extraction.
 
-    Collapses whitespace and anchors the window on the first occurrence of
-    insights-relevant keywords (CPO, packages, price drop, owner history).
-    Falls back to the first `limit` chars when no keyword is found.
+    Collapses whitespace, finds all keyword matches, and builds a window that
+    covers from the first match (minus 200 chars) to 2000 chars past the last
+    match. Falls back to the first `limit` chars when no keyword is found.
+    Uses 2000 chars (up from 1500) to reduce risk of cutting off late-listed
+    option packages on verbose dealer pages.
     """
-    # Collapse runs of whitespace to a single space / newline
     text = re.sub(r"[ \t]+", " ", text)
     text = re.sub(r"\n{3,}", "\n\n", text)
-    m = _INSIGHTS_KEYWORDS.search(text)
-    if m:
-        start = max(0, m.start() - 200)
-        return text[start : start + limit]
+    matches = list(_INSIGHTS_KEYWORDS.finditer(text))
+    if matches:
+        start = max(0, matches[0].start() - 200)
+        end   = min(len(text), matches[-1].end() + limit)
+        excerpt = text[start:end]
+        # If the span is larger than 2×limit, prefer the last-match anchor
+        # (most dealer pages front-load boilerplate before option packages).
+        if len(excerpt) > 2 * limit:
+            start = max(0, matches[-1].start() - 400)
+            excerpt = text[start : start + limit]
+        return excerpt
     return text[:limit]
 
 

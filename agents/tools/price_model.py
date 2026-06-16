@@ -250,21 +250,6 @@ def _is_cpo(row: dict) -> bool:
     return False
 
 
-def _mileage_bucket(miles: float) -> float:
-    """Convert odometer to a 4-level ordinal (0=low, 3=very high).
-    Prevents the model from over-weighting small low-mileage differences:
-    a 1k-mile and 12k-mile car are both 'low mileage' and score similarly.
-      0 = under 15k   (low)
-      1 = 15k–30k     (moderate)
-      2 = 30k–60k     (high)
-      3 = over 60k    (very high)
-    """
-    if miles < 15_000: return 0.0
-    if miles < 30_000: return 1.0
-    if miles < 60_000: return 2.0
-    return 3.0
-
-
 # Trim-level drivetrain overrides — when the trim name alone determines drivetrain.
 # Checked before keyword detection; keyed by (make.lower(), model.lower(), trim.lower()).
 _TRIM_DRIVETRAIN: dict[tuple[str, str, str], str] = {
@@ -305,8 +290,10 @@ def _drivetrain_for(row: dict, trim: str | None, model: str, raw: str | None) ->
     for (mk, mo, min_yr), dt in _DRIVETRAIN_DEFAULTS.items():
         if make == mk and model == mo and year >= min_yr:
             return dt
-    # 3. Keyword detection from trim/model/raw text
-    return row.get("drivetrain") or detect_drivetrain(trim, model, raw)
+    # 3. Keyword detection from trim/model/raw text + listing URL slug
+    url_slug = (row.get("listing_url") or "").replace("-", " ").replace("/", " ")
+    combined_raw = " ".join(filter(None, [raw, url_slug])) or None
+    return row.get("drivetrain") or detect_drivetrain(trim, model, combined_raw)
 
 
 def resolve_drivetrain(listing: dict) -> str:

@@ -1431,6 +1431,30 @@ _TITLE_PREFIXES = re.compile(
 )
 
 
+_POWERTRAIN_QUALIFIERS = re.compile(r"\b(hybrid|phev|recharge|electric|plug.in|eawd)\b", re.IGNORECASE)
+_POWERTRAIN_WORDS = {"hybrid", "phev", "recharge", "electric", "plug-in", "eawd", "350h", "400h", "500h"}
+
+def _llm_model_valid_for_title(model: str, title: str) -> bool:
+    """Validate an LLM-matched model against the original title.
+
+    Two checks:
+    1. If the model has a powertrain qualifier (Hybrid, PHEV, Recharge), the title must too —
+       prevents 'Tucson Hybrid' matching a plain 'Tucson'.
+    2. All non-powertrain words in the model name must appear in the title —
+       prevents 'Tucson Hybrid' matching 'Elantra Hybrid', or 'GV70' matching 'GV80'.
+    """
+    model_lower = model.lower()
+    title_lower = title.lower()
+
+    # Check 1: powertrain qualifier must be in title if model has one
+    if _POWERTRAIN_QUALIFIERS.search(model) and not _POWERTRAIN_QUALIFIERS.search(title):
+        return False
+
+    # Check 2: each non-powertrain word in the model name must appear in the title
+    model_words = [w for w in re.split(r"[\s\-]+", model_lower) if w not in _POWERTRAIN_WORDS and len(w) > 1]
+    return all(w in title_lower for w in model_words)
+
+
 def _parse_title(title: str) -> tuple[str, str, str, str]:
     """Return (year, make, model, trim) from a vehicle title string."""
     cleaned = _TITLE_PREFIXES.sub("", title.strip())
@@ -1463,11 +1487,14 @@ def _parse_title(title: str) -> tuple[str, str, str, str]:
         cache_key = title.strip()
         if cache_key in _llm_title_cache:
             res = _llm_title_cache[cache_key]
-            if res:
+            if res and _llm_model_valid_for_title(res[2], title):
                 return tuple(res)
         else:
             res = _parse_title_llm(title)
-            # Store even if None to prevent retries
+            # Reject if LLM adds a powertrain qualifier not present in the original title
+            # (e.g. "Tucson Hybrid" when title says just "Tucson")
+            if res and not _llm_model_valid_for_title(res[2], title):
+                res = None
             _llm_title_cache[cache_key] = res
             _save_title_cache()
             if res:
