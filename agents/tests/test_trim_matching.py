@@ -155,7 +155,7 @@ import tools.base_trims as _bt
 def _mock_llm(make, model, raw_trim, allowed_trims):
     """Fake LLM: maps hard-coded abbreviations to canonical names."""
     mapping = {
-        "adv plus": "Advanced Plus",
+        "adv":       "Advanced",
         "prem plus": "Premium Plus",
         "prem+":     "Premium Plus",
         "limited awd pkg": "Limited",
@@ -169,8 +169,7 @@ def test_llm_fallback_canonical_trim(monkeypatch):
     """canonical_trim should use LLM when all 3 regex passes fail."""
     monkeypatch.setattr(_bt, "_llm_canonical_trim", _mock_llm)
     monkeypatch.setattr(_bt, "_llm_trim_cache", {})
-    assert canonical_trim("Mazda", "CX-50 Hybrid", "PREM PLUS") == "Premium Plus"
-    assert canonical_trim("Mazda", "CX-50 Hybrid", "PREM+") == "Premium Plus"
+    assert canonical_trim("Genesis", "GV70", "ADV") == "Advanced"
 
 
 def test_llm_fallback_canonical_trim_for_accepted_listing(monkeypatch):
@@ -215,12 +214,12 @@ def test_llm_cache_prevents_duplicate_calls(monkeypatch):
     call_count = {"n": 0}
     def _counting_llm(make, model, raw_trim, allowed_trims):
         call_count["n"] += 1
-        return "Premium Plus" if raw_trim.lower() == "prem plus" else None
+        return "Advanced" if raw_trim.lower() == "adv" else None
 
     monkeypatch.setattr(_bt, "_llm_canonical_trim", _counting_llm)
     monkeypatch.setattr(_bt, "_llm_trim_cache", {})
-    canonical_trim("Mazda", "CX-50 Hybrid", "PREM PLUS")
-    canonical_trim("Mazda", "CX-50 Hybrid", "PREM PLUS")
+    canonical_trim("Genesis", "GV70", "ADV")
+    canonical_trim("Genesis", "GV70", "ADV")
     assert call_count["n"] == 1  # second call served from _llm_trim_cache
 
 

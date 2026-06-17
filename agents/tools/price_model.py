@@ -12,7 +12,7 @@ Layer 2 — meta-blend
   per vehicle slug.  Weights are normalised to sum=1 for interpretability.
 
 SHAP waterfall still runs on the GB component (TreeExplainer requirement).
-Global fallback (< 30 rows) stays pure GB — cross-model stacking adds noise.
+Models with < 30 rows are skipped; those listings return unscored.
 
 Saved as: agents/tools/price_model_{model_slug}.pkl  (StackedModel dataclass)
 Gas/PHEV splits (e.g. XC60 vs XC60 Recharge) are handled as separate cars.json
@@ -93,7 +93,6 @@ _TRIM_LEVELS: dict[str, dict[str, int]] = {
     "xc40":             {"core": 1, "plus": 2, "ultimate": 3},
     "xc60":             {"core": 1, "plus": 2, "ultimate": 3},
     "xc60 recharge":   {"core": 1, "plus": 2, "ultimate": 3},
-    "cx-50 hybrid":    {"preferred": 1, "premium": 2, "premium plus": 3},
 }
 
 _ALL_MODELS = list(_TRIM_LEVELS.keys())
@@ -277,7 +276,6 @@ _DRIVETRAIN_DEFAULTS: dict[tuple[str, str, int], str] = {
     ("volvo",   "xc60 recharge",  2023): "awd",  # XC60 Recharge T8 eAWD
     ("volvo",   "xc40",           2024): "awd",  # 2024+ XC40: B4 FWD dropped, all variants AWD
     # XC40 2023: B4=FWD, B5 FWD or AWD — detect from raw trim text
-    ("mazda",   "cx-50 hybrid",   2024): "awd",  # CX-50 Hybrid is i-ACTIV AWD on all trims
 }
 
 
@@ -308,35 +306,6 @@ def resolve_drivetrain(listing: dict) -> str:
     return _drivetrain_for(listing, trim, model, raw)
 
 
-def _base_msrp(row: dict) -> float:
-    model = (row.get("model") or "").lower().strip()
-    year = int(row.get("year") or _CURRENT_YEAR)
-    
-    v = None
-    for veg in _VEH_LIST:
-        if veg["model"].lower() == model:
-            v = veg
-            break
-            
-    if not v or "msrp" not in v or not v["msrp"]:
-        return 35000.0
-        
-    msrp_table = v["msrp"]
-    year_str = str(year)
-    if year_str not in msrp_table:
-        years = sorted([int(y) for y in msrp_table.keys()])
-        if not years:
-            return 35000.0
-        closest_yr = min(years, key=lambda y: abs(y - year))
-        year_str = str(closest_yr)
-        
-    msrp_year_table = msrp_table[year_str]
-    if not msrp_year_table:
-        return 35000.0
-        
-    return float(min(msrp_year_table.values()))
-
-
 def _to_features(row: dict) -> list[float]:
     model = (row.get("model") or "").lower()
     trim  = row.get("trim")
@@ -350,7 +319,6 @@ def _to_features(row: dict) -> list[float]:
         raw_mileage = float(row.get("mileage"))
         
     return [
-        _base_msrp(row),
         float(row.get("year") or _CURRENT_YEAR),
         math.log1p(raw_mileage),
         _trim_premium(row),
@@ -361,16 +329,15 @@ def _to_features(row: dict) -> list[float]:
     ]
 
 
-# Feature order: [base_msrp, year, mileage, trim_premium, drivetrain, powertrain, cpo]
+# Feature order: [year, mileage, trim_premium, drivetrain, powertrain, cpo]
 # Monotone constraints enforce economic common sense:
-#   base_msrp (+1): more expensive baseline car = more expensive overall
 #   year (+1): newer = more expensive
 #   mileage (-1): more miles = less expensive
 #   trim_premium (+1): higher trim = more expensive
 #   drivetrain (+1): AWD > FWD
 #   powertrain (+1): hybrid/EV > gas
 #   cpo (+1): CPO > non-CPO
-_MONOTONIC_CST = [1, 1, -1, 1, 1, 1, 1]  # base_msrp+, year+, mileage-, trim_premium+, drivetrain+, powertrain+, cpo+
+_MONOTONIC_CST = [1, -1, 1, 1, 1, 1]  # year+, mileage-, trim_premium+, drivetrain+, powertrain+, cpo+
 
 
 def _make_gb_pipeline() -> Pipeline:
@@ -422,7 +389,6 @@ _PLATFORM_MIN_YEAR: dict[str, int] = {
     "xc40":            2023,  # CMA platform refresh; 2022 and earlier is a different gen
     "xc60":            2023,  # SPA platform refresh for 2023+
     "xc60recharge":   2023,  # Recharge T8 PHEV also on SPA refresh platform
-    "cx50hybrid":    2024,  # CX-50 Hybrid launched 2024; no prior-gen hybrid data
 }
 
 
@@ -579,17 +545,6 @@ def train(save: bool = True) -> dict[str, Pipeline]:
         if pipe:
             fitted[model_name] = pipe
 
-    # Global fallback trained on all data combined
-    if len(all_X) >= _MIN_ROWS:
-        global_pipe = _make_pipeline()
-        global_pipe.fit(all_X, all_y)
-        fitted["_global"] = global_pipe
-        if save:
-            joblib.dump(global_pipe, _pkl_path("_global"))
-        preds  = global_pipe.predict(all_X)
-        errors = np.abs(np.array(preds) - np.array(all_y))
-        print(f"  [_global]  n={len(all_X)}  MAE=${np.mean(errors):,.0f}")
-
     return fitted
 
 
@@ -621,7 +576,7 @@ def _detect_powertrain_for(listing: dict) -> str:
 
 
 def predict_fair_price(listing: dict) -> tuple[int, float] | tuple[None, None]:
-    """Predict fair price using the per-model estimator, falling back to global.
+    """Predict fair price using the per-model estimator.
 
     Returns (fair_price, residual_std) — both None if no model available.
     residual_std is the OOF residual std dev used to normalise the deal score.
@@ -634,15 +589,6 @@ def predict_fair_price(listing: dict) -> tuple[int, float] | tuple[None, None]:
         try:
             price = int(round(model.predict(features)[0]))
             std   = model.residual_std if isinstance(model, StackedModel) else 0.0
-            return price, std
-        except Exception:
-            pass
-
-    global_model = _load_model(_pkl_path("_global"))
-    if global_model is not None:
-        try:
-            price = int(round(global_model.predict(features)[0]))
-            std   = global_model.residual_std if isinstance(global_model, StackedModel) else 0.0
             return price, std
         except Exception:
             pass
@@ -685,8 +631,6 @@ def explain_listing(listing: dict) -> dict | None:
     X_raw = _np.array([raw_features])
 
     pipe = _load_model(_pkl_path(model_name))
-    if pipe is None:
-        pipe = _load_model(_pkl_path("_global"))
     if pipe is None:
         return None
 
@@ -733,26 +677,24 @@ def explain_listing(listing: dict) -> dict | None:
             else:
                 shap_vals = _np.zeros_like(shap_vals)
 
-        base_msrp      = raw_features[0]
-        year           = int(raw_features[1])
-        # raw_features[2] is log1p(miles) — show actual miles in label
+        year           = int(raw_features[0])
+        # raw_features[1] is log1p(miles) — show actual miles in label
         if listing.get("mileage") is None:
             vehicle_year = int(listing.get("year") or _CURRENT_YEAR)
             age_years = max(1, _CURRENT_YEAR - vehicle_year + 1)
             mileage_actual = int(min(80_000, age_years * 12_000))
         else:
             mileage_actual = int(listing.get("mileage"))
-        trim_lvl   = raw_features[3]
-        drivetrain = raw_features[4]
-        powertrain = raw_features[5]
-        cpo        = raw_features[6]
+        trim_lvl   = raw_features[2]
+        drivetrain = raw_features[3]
+        powertrain = raw_features[4]
+        cpo        = raw_features[5]
 
         # Use the original ordinal trim level for fallback naming if trim is None
         trim_ord = _trim_level(model_name, listing.get("trim"))
         trim_name = listing.get("trim") or f"Level {trim_ord:.0f}"
 
         raw_labels = [
-            (f"Base MSRP — ${base_msrp:,.0f}", base_msrp),
             (f"Year {year}",                  float(year)),
             (f"{mileage_actual:,} miles",     float(mileage_actual)),   # show actual miles, not log value
             (f"Trim — {trim_name[:25]}",      trim_lvl),

@@ -81,11 +81,10 @@ def test_to_features_shape_and_values():
         "cpo": True
     }
     features = _to_features(row)
-    # Features order: [base_msrp, year, mileage, trim_premium, drivetrain, powertrain, cpo]
-    assert len(features) == 7
-    assert features[0] == 33450.0  # base_msrp
-    assert features[1] == 2025.0   # year
-    assert features[3] == 3015.0   # trim premium
-    assert features[4] == 1.0      # awd
-    assert features[5] == 0.8      # hybrid
-    assert features[6] == 1.0      # cpo
+    # Features order: [year, mileage, trim_premium, drivetrain, powertrain, cpo]
+    assert len(features) == 6
+    assert features[0] == 2025.0   # year
+    assert features[2] == 3015.0   # trim premium
+    assert features[3] == 1.0      # awd
+    assert features[4] == 0.8      # hybrid
+    assert features[5] == 1.0      # cpo

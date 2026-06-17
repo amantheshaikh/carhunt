@@ -140,18 +140,6 @@
       }
     },
     {
-      "make": "Mazda", "model": "CX-50 Hybrid", "cargurus_id": "d3215",
-      "cargurus_search_path": "m42,m42/d3215,m42/d3215/Hybrid Preferred AWD,m42/d3215/Hybrid Premium AWD,m42/d3215/Hybrid Premium Plus AWD",
-      "trims": ["Preferred", "Premium", "Premium Plus"],
-      "engine_filter": ["Hybrid"],
-      "min_year": 2024,
-      "msrp": {
-        "2024": { "Preferred": 36045, "Premium": 39045, "Premium Plus": 41045 },
-        "2025": { "Preferred": 36545, "Premium": 39545, "Premium Plus": 41545 },
-        "2026": { "Preferred": 34750, "Premium": 38150, "Premium Plus": 40450 }
-      }
-    },
-    {
       "make": "Lexus", "model": "NX 350h", "cargurus_id": "d2294",
       "cargurus_search_path": "m37,m37/d2294,m37/d2294/350h AWD,m37/d2294/350h Premium AWD,m37/d2294/350h Luxury AWD,m37/d2294/350h F SPORT Handling AWD",
       "trims": ["Premium", "Luxury", "F SPORT"],

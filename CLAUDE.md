@@ -49,7 +49,6 @@ carhunt/
 | Lexus | NX 350h | d2294 | Premium, Luxury, F SPORT | 2022–2024 |
 | Volvo | XC40 | d2624 | Plus, Ultimate (B4 FWD or B5 AWD) | 2023–2025 |
 | Volvo | XC60 | d1629 | Plus, Ultimate (B5 gas or Recharge T8 PHEV) | 2023–2025 |
-| Mazda | CX-50 Hybrid | d3215 | Preferred, Premium, Premium Plus | 2024+ |
 
 **Search params** (stored in `user_settings` DB table):
 - Zip: 30328 · Radius: 100 mi · Max price: $45k · Years: 2025–2026
@@ -57,7 +56,7 @@ carhunt/
 
 **CarGurus IDs** are model-specific page identifiers. The new search format uses `cargurus_search_path` (make/model/trim paths encoded as `m{makeId}/d{modelId}/trimName`).
 
-**Make IDs:** Hyundai=m28, Genesis=m203, Kia=m33, VW=m55, Buick=m21, BMW=m3, Cadillac=m22, Lexus=m37, Volvo=m56, Mazda=m42
+**Make IDs:** Hyundai=m28, Genesis=m203, Kia=m33, VW=m55, Buick=m21, BMW=m3, Cadillac=m22, Lexus=m37, Volvo=m56
 
 **Notes:**
 - BMW X1 2023–2025: xDrive28i only (always AWD). sDrive28i and M35i excluded.
@@ -68,7 +67,6 @@ carhunt/
 - Genesis GV70: `engine_filter: ["2.5T"]` — shares a CarGurus page with the 3.5T; filter requires "2.5T" in trim. Training trims include Standard/Select for broader depreciation curve.
 - Kia Sportage PHEV: separate model from Sportage Hybrid — different CarGurus ID (d3244), different trim set. Always AWD.
 - Cadillac XT4: sourcing target for 2024–2025 Luxury/Premium Luxury/Sport. Both FWD and AWD variants.
-- Mazda CX-50 Hybrid: `engine_filter: ["Hybrid"]` — bypassed for Cars.com (slug `mazda-cx_50_hybrid` already scopes to hybrid); applied for all other sources.
 - Year range in `user_settings` is the global floor; per-model `min_year`/`max_year` in cars.json take precedence.
 
 **Adding a new vehicle:**
@@ -130,12 +128,10 @@ Returns `(price_fps, dealer_fps)` where:
 
 ## Scoring & Deal Categories
 
-**Per-model std normalization (primary):** `Score = sigmoid((ML_fair_price − listing_price) / residual_std × 0.94)`
-where `residual_std` is the OOF residual std dev stored in the per-model pickle. k=0.94 calibrates so 1σ below fair ≈ 72 (Great Deal), 2σ ≈ 88 (Exceptional Deal).
+**Scoring formula:** `Score = sigmoid((ML_fair_price − listing_price) / residual_std × 0.94)`
+where `residual_std` is the OOF residual std dev from the per-model pickle (floor $600). k=0.94 calibrates so 1σ below fair ≈ 72 (Great Deal), 2σ ≈ 88 (Exceptional Deal).
 
-**Global model fallback:** `Score = sigmoid((ML_fair_price − listing_price) / ML_fair_price × 11)` (percentage-based, used when `residual_std = 0`).
-
-This means the same dollar discount is worth more for tightly-priced models (low std) than wide-spread ones.
+The same dollar discount is worth more for tightly-priced models (low std) than wide-spread ones.
 
 | Score | Deal Category | Meaning |
 |---|---|---|
@@ -155,7 +151,7 @@ Score < 40 is a display category only — listings are **never** auto-dismissed 
 - **Monotone constraints (applied to GB):** mileage↑→price↓, year↑→price↑, trim_premium↑→price↑, AWD>FWD, hybrid/PHEV>gas, CPO>non-CPO
 - **Features:** year, log-transformed mileage (`log1p(mileage)`), trim_premium (dollar premium relative to base trim MSRP), drivetrain (0/0.5/1), powertrain (gas=0, hybrid=0.8, PHEV/electric=1.0), cpo (0/1)
 - **Output:** `listing_scores` — `value_score` (0–100), `fair_price`, `shap_values` (JSONB containing base_value, predicted, features, `gb_pred`, `knn_pred`, `ridge_pred`, and `meta_weights`)
-- Trained per vehicle slug (e.g. `price_model_tiguan.pkl`), falls back to standard single-model `HistGradientBoostingRegressor` `price_model__global.pkl` if < 30 training rows.
+- Trained per vehicle slug (e.g. `price_model_tiguan.pkl`). Models with < 30 training rows are skipped and those listings show as unscored.
 
 **SHAP values** (calculated on the GB component) stored alongside individual estimator predictions and weights for detailed waterfall and ensemble influence visualization.
 
@@ -258,7 +254,7 @@ Type `/retrain` in Claude Code to run a broad market sweep and retrain the model
 | File | When to change |
 |---|---|
 | `agents/cars.json` | Add/remove models, change trims, update CarGurus IDs or search paths |
-| `agents/tools/scoring.py` | Sigmoid formula (k=0.94 for per-model std, k=11 for global fallback), drivetrain/powertrain detection keywords |
+| `agents/tools/scoring.py` | Sigmoid formula (k=0.94, std floor $600), drivetrain/powertrain detection keywords |
 | `agents/analysis_agent.py` | Stacked ensemble scoring — `listing_scores` |
 | `agents/tools/price_model.py` | Stacked ensemble, MSRP-based trim_premium, CPO feature, drivetrain overrides, platform min-years |
 | `agents/tools/scrapers.py` | CarGurus format, pagination, anti-detection, LLM insight extraction |
@@ -373,10 +369,10 @@ PROXY_URL=...                   # optional: http://user:pass@host:port for resid
 - **`analysis_agent.py` has no LLM.** Scores all unscored listings in a single batch using the stacked ensemble.
 - **`query_agent.py`** uses LLM (deepseek/deepseek-v4-flash via OpenRouter) for natural-language questions about the listing DB. `max_tokens=500` caps runaway responses.
 - **Filter bar is client-side.** All filtering and sorting happens in-memory in Dashboard.tsx.
-- **Cars.com model slug** uses `re.sub(r"[^a-z0-9]+", "_", model.lower())` — all non-alphanumeric chars become underscores (e.g. "CX-50 Hybrid" → `mazda-cx_50_hybrid`). Old `str.replace(' ', '_')` left hyphens intact.
+- **Cars.com model slug** uses `re.sub(r"[^a-z0-9]+", "_", model.lower())` — all non-alphanumeric chars become underscores. Old `str.replace(' ', '_')` left hyphens intact, breaking hyphenated model names.
 - **`engine_filter` is source-aware** — bypassed for `carscom` when the model name itself contains the filter keyword (slug already scopes to the right variant). Always applied for CarGurus and Carvana/CarMax where the model page may include multiple engine variants.
 - **`user_notes`** — `TEXT` column on `listings`; editable via the detail panel textarea and `PATCH /api/listings/:id`. Auto-saves on blur.
-- **Stacked model pickle path** — per-model `StackedModel` dataclass saved as `price_model_{slug}.pkl`; global fallback stays a plain `Pipeline`. `StackedModel.__module__` is forced to `tools.price_model` at definition time to prevent `__main__` pickle namespace issues when training via CLI.
+- **Stacked model pickle path** — per-model `StackedModel` dataclass saved as `price_model_{slug}.pkl`. `StackedModel.__module__` is forced to `tools.price_model` at definition time to prevent `__main__` pickle namespace issues when training via CLI.
 - **Dedup within a run:** `known_urls`, `known_vins`, `known_price_fps`, `known_dealer_fps` fetched once before the source loop, shared across all sources including dealers.
 - **LLM token optimization:** All LLM calls use module-level shared OpenAI clients. Insight text pre-processed via `_focus_listing_text()` to a 2000-char focused window. Output caps: insights=150 (raised from 120 to accommodate trim field), trim=30, summary=80, query=500.
 - **Postgres runs in Docker** (`docker compose up -d db`). Schema in `db/schema.sql`.

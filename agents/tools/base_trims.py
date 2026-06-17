@@ -40,6 +40,27 @@ def get_vehicles() -> list[tuple[str, str]]:
     return [(v["make"], v["model"]) for v in _VEHICLES]
 
 
+# Canonical (make, model) casing keyed by their lowercased equivalents.
+# Scrapers return inconsistent casing (ALL CAPS, title case, etc.); this normalizes to cars.json.
+_CANONICAL_NAMES: dict[tuple[str, str], tuple[str, str]] = {
+    (v["make"].lower(), v["model"].lower()): (v["make"], v["model"])
+    for v in _VEHICLES
+}
+
+
+def normalize_listing_model(make: str, model: str, trim: str | None = None) -> tuple[str, str]:
+    """Return (canonical_make, canonical_model) for a scraped listing.
+
+    Applies XC60 gas/PHEV split then looks up canonical casing from cars.json.
+    Call this before any DB insert or allowlist check.
+    """
+    model = split_xc60_model(make, model, trim)
+    canonical = _CANONICAL_NAMES.get((make.lower(), model.lower()))
+    if canonical:
+        make, model = canonical
+    return make, model
+
+
 def split_xc60_model(make: str, model: str, raw_trim: str) -> str:
     """Return canonical model name for Volvo XC60 listings, splitting gas vs PHEV by trim text.
 
@@ -52,18 +73,6 @@ def split_xc60_model(make: str, model: str, raw_trim: str) -> str:
     trim_lower = (raw_trim or "").lower()
     return "XC60 Recharge" if ("recharge" in trim_lower or "t8" in trim_lower) else "XC60"
 
-
-def split_cx50_model(make: str, model: str, raw_trim: str, raw_text: str | None = None) -> str:
-    """Return 'CX-50 Hybrid' if model is CX-50 and trim/text indicates it is a hybrid."""
-    if make.lower() != "mazda" or _norm(model) not in ("cx50", "cx50hybrid"):
-        return model
-    if "hybrid" in model.lower():
-        return "CX-50 Hybrid"
-    trim_lower = (raw_trim or "").lower()
-    text_lower = (raw_text or "").lower()
-    if "hybrid" in trim_lower or "hybrid" in text_lower:
-        return "CX-50 Hybrid"
-    return "CX-50"
 
 
 _ENGINE_PREFIXES = re.compile(r"^(?:\d+\.\d+[tTlLiIdDhH]|\d{2,4}[hHe])\s+", re.IGNORECASE)
@@ -102,8 +111,8 @@ def _engine_filter_passes(v: dict, trim: str, source: str | None = None) -> bool
     distinguish variants like GV70 2.5T vs 3.5T that share the same trim names.
 
     Exception: when source='carscom', Cars.com's model slug already scopes to the
-    correct variant (e.g. mazda-cx_50_hybrid), so requiring the keyword in the trim
-    string is redundant and is skipped when the model name itself contains the term."""
+    correct variant, so requiring the keyword in the trim string is redundant and is
+    skipped when the model name itself contains the filter term."""
     engine_filter = v.get("engine_filter")
     if not engine_filter:
         return True

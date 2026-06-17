@@ -30,13 +30,7 @@ from tools.scrapers import (
     scrape_carscom, enrich_listings_from_detail,
 )
 from tools.dealer_scraper import scrape_all_dealers
-from tools.base_trims import get_allowed_makes, get_allowed_models, get_vehicles, is_trim_allowed, get_model_min_year, get_model_max_year, get_trim_min_year, get_trim_max_year, trim_belongs_to_different_model, canonical_trim, _VEHICLES, _norm, split_xc60_model, split_cx50_model
-
-# Canonical make/model names from cars.json — used to normalise scraper-specific casing
-_CANONICAL_NAMES: dict[tuple[str, str], tuple[str, str]] = {
-    (v["make"].lower(), v["model"].lower()): (v["make"], v["model"])
-    for v in _VEHICLES
-}
+from tools.base_trims import get_allowed_makes, get_allowed_models, get_vehicles, is_trim_allowed, get_model_min_year, get_model_max_year, get_trim_min_year, get_trim_max_year, trim_belongs_to_different_model, canonical_trim, _norm, normalize_listing_model
 
 # Skip a source if it was successfully scraped within this many hours
 MIN_HOURS_BETWEEN_RUNS = 6
@@ -197,10 +191,6 @@ def _is_valid(listing: dict, min_year: int, allowed_makes: list[str],
         return False
     if allowed_models:
         normalized = _normalize_model(model)
-        if normalized == "cx50":
-            raw_text = (listing.get("raw") or {}).get("text") if isinstance(listing.get("raw"), dict) else None
-            resolved_model = split_cx50_model(make, model, trim, raw_text)
-            normalized = _normalize_model(resolved_model)
         if not any(_normalize_model(am) == normalized for am in allowed_models):
             return False
     if year < min_year:
@@ -226,16 +216,7 @@ def _is_valid(listing: dict, min_year: int, allowed_makes: list[str],
 
 
 def _save_new(listing: dict) -> None:
-    # Normalise make/model to canonical casing from cars.json (scrapers use ALL CAPS, title case, etc.)
-    mk, mo = listing["make"], listing["model"]
-    mo = split_xc60_model(mk, mo, listing.get("trim"))
-    raw_text = (listing.get("raw") or {}).get("text") if isinstance(listing.get("raw"), dict) else None
-    mo = split_cx50_model(mk, mo, listing.get("trim"), raw_text)
-    canonical = _CANONICAL_NAMES.get((mk.lower(), mo.lower()))
-    if canonical:
-        mk, mo = canonical
-
-    # Normalize trim to canonical allowlist value (strips suffixes like "AWD", "Sport Activity Vehicle")
+    mk, mo = normalize_listing_model(listing["make"], listing["model"], listing.get("trim"))
     trim = canonical_trim(mk, mo, listing.get("trim"))
 
     # Skip if the VIN is already tracked as an active listing from any source.

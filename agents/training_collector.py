@@ -26,13 +26,7 @@ sys.stdout.reconfigure(line_buffering=True)
 
 from tools.log_tee import enable_log_tee
 from tools.db import execute, fetch_one, refresh_self_computed_medians
-from tools.base_trims import get_allowed_makes, get_allowed_models, get_vehicles, _norm, is_trim_allowed, is_trim_allowed_for_training, canonical_trim, get_model_min_year, get_model_max_year, split_xc60_model, split_cx50_model, _VEHICLES
-
-# Canonical make/model names from cars.json — used to normalise scraper-specific casing
-_CANONICAL_NAMES = {
-    (v["make"].lower(), v["model"].lower()): (v["make"], v["model"])
-    for v in _VEHICLES
-}
+from tools.base_trims import get_allowed_makes, get_allowed_models, get_vehicles, _norm, is_trim_allowed, is_trim_allowed_for_training, canonical_trim, get_model_min_year, get_model_max_year, normalize_listing_model, _VEHICLES
 from tools.scoring import detect_powertrain, detect_drivetrain
 from tools.price_model import _drivetrain_for
 from tools.scrapers import scrape_cargurus, scrape_carvana, scrape_carscom, scrape_carmax
@@ -107,28 +101,19 @@ def _insert(rows: list[dict], allowed_norm: set[str], min_year: int | None = Non
         source = l.get("source", "cargurus")
         if not all([make, model, year, price]):
             continue
-        # Normalise make/model to canonical casing from cars.json (scrapers use ALL CAPS, title case, etc.)
-        canonical = _CANONICAL_NAMES.get((make.lower(), model.lower()))
-        if canonical:
-            make, model = canonical
-        # Check allowlist — treat "xc60recharge" as "xc60", and "cx50" as "cx50hybrid" since they share pages
+        make, model = normalize_listing_model(make, model, l.get("trim"))
+        # Check allowlist — treat "xc60recharge" as "xc60" since they share a CarGurus page
         check_norm = _norm(model)
         if check_norm == "xc60recharge":
             check_norm = "xc60"
-        elif check_norm == "cx50":
-            check_norm = "cx50hybrid"
-
         if check_norm not in allowed_norm:
             continue
 
         raw_text_base = (l.get("raw") or {}).get("text") if isinstance(l.get("raw"), dict) else None
         url_slug = (l.get("listing_url") or "").replace("-", " ").replace("/", " ")
         raw_text = " ".join(filter(None, [raw_text_base, url_slug])) or None
-        # Split models using shared helpers
-        model = split_xc60_model(make, model, l.get("trim"))
-        model = split_cx50_model(make, model, l.get("trim"), raw_text)
 
-        # Re-check allowlist after the split to filter out non-recharge XC60 or gas CX-50
+        # Re-check allowlist after normalize_listing_model (XC60 split) to filter out gas XC60
         if _norm(model) not in allowed_norm:
             continue
         if min_year and int(year) < min_year:

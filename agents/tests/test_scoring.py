@@ -78,9 +78,9 @@ def test_score_overpriced():
     assert score_listing(36_000, 30_000) <= 10
 
 def test_score_slightly_below():
-    # 10% below market with steepness=11 → sigmoid(0.1*11) ≈ 75
-    score = score_listing(27_000, 30_000)
-    assert 72 <= score <= 78
+    # $3k below on $30k car, residual_std=1500 → z=2 → sigmoid(2*0.94) ≈ 87
+    score = score_listing(27_000, 30_000, residual_std=1500)
+    assert 84 <= score <= 90
 
 def test_score_none_when_no_ml_price():
     assert score_listing(30_000, None) is None
@@ -127,4 +127,15 @@ def test_powertrain_extra_keywords():
     assert detect_powertrain("RX 500h F Sport", None) == "hybrid"
     
     assert detect_powertrain("Model Y BEV", None) == "electric"
+
+
+def test_score_listing_overflow_bounds():
+    # Extreme overpriced values should not raise OverflowError, they should clip to 0.0
+    assert score_listing(1_000_000, 30_000, 600.0) == 0.0
+    assert score_listing(10_000_000, 30_000) == 0.0
+    
+    # Extreme underpriced values should not raise OverflowError, they should clip to 100.0
+    assert score_listing(1, 30_000, 600.0) == 100.0
+    assert score_listing(1, 30_000) == 100.0
+
 
