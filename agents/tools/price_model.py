@@ -720,9 +720,12 @@ def explain_listing(listing: dict) -> dict | None:
         ensemble_adj      = 0
         if abs(gb_delta) > 1e-2:
             scale_factor = target_delta / gb_delta
-            if 0 < scale_factor <= 3:
+            if 0.3 <= scale_factor <= 3:
                 shap_vals = shap_vals * scale_factor
             else:
+                # scale < 0 (sign flip), scale > 3 (wild amplification), or
+                # scale < 0.3 (severe compression — KNN/Ridge cancel most of GB's
+                # signal, collapsing individual SHAPs to noise): use raw GB SHAPs.
                 ensemble_adj = int(round(predicted - gb_pred_val))
         else:
             if abs(target_delta) > 1e-2:
