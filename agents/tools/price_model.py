@@ -703,12 +703,26 @@ def explain_listing(listing: dict) -> dict | None:
         gb_pred_val = int(round(base_value + shap_vals.sum()))
         predicted  = int(round(pipe.predict(X_raw)[0])) if isinstance(pipe, StackedModel) else gb_pred_val
 
-        # Scale SHAP values proportionally so they sum to predicted - base_value
-        gb_delta = gb_pred_val - base_value
-        target_delta = predicted - base_value
+        # Reconcile GB SHAP values (which sum to gb_pred - base_value) with the
+        # stacked prediction. Two strategies depending on scale_factor health:
+        #
+        # Healthy (0 < scale ≤ 3): multiply shap_vals so they sum to
+        #   (predicted - base_value). Signs are preserved, magnitudes scaled.
+        #
+        # Unhealthy (scale < 0 or scale > 3): scaling would flip signs or
+        #   wildly amplify. Instead, absorb the GB↔stacked discrepancy into
+        #   base_value so shap_vals stay raw — signs and relative sizes correct.
+        #   e.g. GB=+27 above base, stacked=-73 below → scale=-2.73 would flip
+        #   every SHAP; shifting base by -100 preserves the waterfall correctly.
+        gb_delta     = gb_pred_val - base_value
+        target_delta = predicted   - base_value
         if abs(gb_delta) > 1e-2:
             scale_factor = target_delta / gb_delta
-            shap_vals = shap_vals * scale_factor
+            if 0 < scale_factor <= 3:
+                shap_vals = shap_vals * scale_factor
+            else:
+                # Shift base_value so raw shap_vals (summing to gb_delta) land on predicted
+                base_value = base_value + (target_delta - gb_delta)
         else:
             if abs(target_delta) > 1e-2:
                 shap_vals = _np.array([target_delta / len(shap_vals)] * len(shap_vals))
