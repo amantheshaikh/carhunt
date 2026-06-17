@@ -704,25 +704,26 @@ def explain_listing(listing: dict) -> dict | None:
         predicted  = int(round(pipe.predict(X_raw)[0])) if isinstance(pipe, StackedModel) else gb_pred_val
 
         # Reconcile GB SHAP values (which sum to gb_pred - base_value) with the
-        # stacked prediction. Two strategies depending on scale_factor health:
+        # stacked prediction.
         #
-        # Healthy (0 < scale ≤ 3): multiply shap_vals so they sum to
-        #   (predicted - base_value). Signs are preserved, magnitudes scaled.
+        # Healthy (0 < scale ≤ 3): scale shap_vals so they sum to
+        #   (predicted - base_value). Signs preserved, magnitudes scaled slightly.
         #
         # Unhealthy (scale < 0 or scale > 3): scaling would flip signs or
-        #   wildly amplify. Instead, absorb the GB↔stacked discrepancy into
-        #   base_value so shap_vals stay raw — signs and relative sizes correct.
-        #   e.g. GB=+27 above base, stacked=-73 below → scale=-2.73 would flip
-        #   every SHAP; shifting base by -100 preserves the waterfall correctly.
-        gb_delta     = gb_pred_val - base_value
-        target_delta = predicted   - base_value
+        #   wildly amplify (e.g. GB=+27 vs stacked=-73 → scale=-2.73).
+        #   Keep raw GB shap_vals (correct signs/magnitudes) and record the
+        #   GB↔stacked gap as a separate ensemble_adjustment value surfaced in
+        #   the feature list. base_value stays at the canonical GB expected_value
+        #   so it remains comparable across all listings of the same model.
+        gb_delta          = gb_pred_val - base_value
+        target_delta      = predicted   - base_value
+        ensemble_adj      = 0
         if abs(gb_delta) > 1e-2:
             scale_factor = target_delta / gb_delta
             if 0 < scale_factor <= 3:
                 shap_vals = shap_vals * scale_factor
             else:
-                # Shift base_value so raw shap_vals (summing to gb_delta) land on predicted
-                base_value = base_value + (target_delta - gb_delta)
+                ensemble_adj = int(round(predicted - gb_pred_val))
         else:
             if abs(target_delta) > 1e-2:
                 shap_vals = _np.array([target_delta / len(shap_vals)] * len(shap_vals))
@@ -762,6 +763,8 @@ def explain_listing(listing: dict) -> dict | None:
             for (label, raw), sv in zip(raw_labels, shap_vals)
             if abs(sv) >= 50  # skip noise
         ]
+        if abs(ensemble_adj) >= 50:
+            features.append({"label": "Ensemble Adjustment", "delta": ensemble_adj, "raw": float(ensemble_adj)})
 
         gb_pred = gb_pred_val  # equals base_value + shap_vals.sum()
         if isinstance(pipe, StackedModel):
