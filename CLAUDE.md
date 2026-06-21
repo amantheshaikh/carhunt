@@ -186,7 +186,7 @@ Score < 40 is a display category only — listings are **never** auto-dismissed 
 
 ## XC60 Gas / PHEV Split
 
-XC60 gas (B5) and PHEV (Recharge T8) share the same CarGurus model page, stored as separate DB model names: `"XC60"` for gas and `"XC60 Recharge"` for PHEV. The split happens in `sourcing_agent._save_new` and `training_collector._insert` by inspecting the raw trim string before canonicalization. The `allowed_norm` allowlist check must run **before** the split (against the original `"xc60"` name).
+XC60 gas (B5) and PHEV (Recharge T8) share the same CarGurus model page, stored as separate DB model names: `"XC60"` for gas and `"XC60 Recharge"` for PHEV. The split is handled by `normalize_listing_model()` in `base_trims.py` (called from `sourcing_agent._save_new` and `training_collector._insert`), which applies `split_xc60_model` then canonical casing. The `allowed_norm` allowlist check must run **before** the split (against the original `"xc60"` name).
 
 ---
 
@@ -234,7 +234,7 @@ Targeted fix for a single model.
 # Rederive (fast, no network) — fixes drivetrain/powertrain/canonical trim in-place:
 python3 backfill_training.py --model xc60
 
-# Rescrape (slow) — deletes and re-collects from all sources:
+# Rescrape (slow) — re-collects from all sources, ON CONFLICT DO UPDATE (non-destructive):
 python3 backfill_training.py --model xc60 --mode rescrape --retrain
 
 # Dry run:
@@ -258,7 +258,7 @@ Type `/retrain` in Claude Code to run a broad market sweep and retrain the model
 | `agents/analysis_agent.py` | Stacked ensemble scoring — `listing_scores` |
 | `agents/tools/price_model.py` | Stacked ensemble, MSRP-based trim_premium, CPO feature, drivetrain overrides, platform min-years |
 | `agents/tools/scrapers.py` | CarGurus format, pagination, anti-detection, LLM insight extraction |
-| `agents/tools/base_trims.py` | Trim normalization logic, LLM fallback, on-disk cache |
+| `agents/tools/base_trims.py` | Trim normalization, LLM fallback, `_CANONICAL_NAMES`, `normalize_listing_model()` |
 | `agents/tools/log_tee.py` | Dashboard log file path, tee behavior |
 | `agents/sourcing_agent.py` | Validation rules, fingerprint dedup, scraping flow |
 | `agents/tools/dealer_scraper.py` | Dealer scraping strategies, per-site timeouts |

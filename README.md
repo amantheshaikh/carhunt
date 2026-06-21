@@ -135,13 +135,10 @@ carhunt/
 
 ## How the Value Score works
 
-Each listing is scored 0–100 using a per-model standard deviation z-score formula:
-`sigmoid((fair_price − listing_price) / residual_std × 0.94)` (where `residual_std` has a minimum floor of $600.0).
+Each listing is scored 0–100 using a per-model z-score sigmoid:
+`sigmoid((fair_price − listing_price) / residual_std × 0.94)` (where `residual_std` has a minimum floor of $600.0). k=0.94 calibrates so 1σ below fair ≈ 72 (Great Deal) and 2σ ≈ 88 (Exceptional Deal).
 
-If no per-model standard deviation is available, it falls back to the percentage-based formula:
-`sigmoid((fair_price − listing_price) / fair_price × 11)`.
-
-The fair price comes from a **Stacked Ensemble** (blended `HistGradientBoostingRegressor` + `KNeighborsRegressor` + `Ridge` regression, or standard `HistGradientBoostingRegressor` fallback for the global model) trained on broad market data for each target vehicle. Features: year, log-transformed mileage (`log1p(mileage)`), trim premium (dollar premium relative to base trim MSRP), drivetrain (FWD/AWD), powertrain (gas/hybrid/PHEV), and CPO status.
+The fair price comes from a **Stacked Ensemble** (`HistGradientBoostingRegressor` + `KNeighborsRegressor` + `Ridge`) trained per vehicle on broad market data. Features: year, log-transformed mileage (`log1p(mileage)`), trim premium (dollar premium relative to base trim MSRP), drivetrain (FWD/AWD), powertrain (gas/hybrid/PHEV), and CPO status.
 
 Drivetrain is resolved in priority order: trim-level override → model/year override → keyword detection from listing text and URL slug (hyphens converted to spaces, so `/tiguan-2-0t-se-fwd/` correctly yields FWD).
 
