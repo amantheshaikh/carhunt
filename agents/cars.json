@@ -14,14 +14,14 @@
     {
       "make": "Genesis", "model": "GV70", "cargurus_id": "d3163",
       "cargurus_search_path": "m203/d3163,m203/d3163/2.5T Advanced AWD,m203/d3163/2.5T Sport Prestige AWD",
-      "trims": ["Advanced", "Sport Prestige"],
-      "training_trims": ["Standard", "Select", "Advanced", "Sport Prestige"],
+      "trims": ["Advanced", "Advanced Plus", "Sport Prestige"],
+      "training_trims": ["Standard", "Select", "Advanced", "Advanced Plus", "Sport Prestige"],
       "engine_filter": ["2.5T"],
       "min_year": 2023, "max_year": 2025,
       "msrp": {
-        "2023": { "2.5T Standard": 42950, "2.5T Select": 47045, "2.5T Advanced": 51295, "2.5T Sport Prestige": 56695, "3.5T Sport": 55470, "3.5T Sport Prestige": 62495 },
-        "2024": { "2.5T Standard": 43950, "2.5T Select": 48045, "2.5T Advanced": 52295, "2.5T Sport Prestige": 57945, "3.5T Sport": 56920, "3.5T Sport Prestige": 63995 },
-        "2025": { "2.5T Standard": 44450, "2.5T Select": 48545, "2.5T Advanced": 52995, "2.5T Sport Prestige": 58945, "3.5T Sport": 57920, "3.5T Sport Prestige": 65195 }
+        "2023": { "2.5T Standard": 42950, "2.5T Select": 47045, "2.5T Advanced": 51295, "2.5T Advanced Plus": 54295, "2.5T Sport Prestige": 56695, "3.5T Sport": 55470, "3.5T Sport Prestige": 62495 },
+        "2024": { "2.5T Standard": 43950, "2.5T Select": 48045, "2.5T Advanced": 52295, "2.5T Advanced Plus": 55295, "2.5T Sport Prestige": 57945, "3.5T Sport": 56920, "3.5T Sport Prestige": 63995 },
+        "2025": { "2.5T Standard": 44450, "2.5T Select": 48545, "2.5T Advanced": 52995, "2.5T Advanced Plus": 55995, "2.5T Sport Prestige": 58945, "3.5T Sport": 57920, "3.5T Sport Prestige": 65195 }
       }
     },
     {
@@ -84,7 +84,7 @@
       "make": "BMW", "model": "X3", "cargurus_id": "d392",
       "cargurus_search_path": "m3/d392/xDrive30i AWD,m3/d392/sDrive30i RWD,m3,m3/d392",
       "trims": ["sDrive30i", "xDrive30i"],
-      "min_year": 2023, "max_year": 2025,
+      "min_year": 2022, "max_year": 2025,
       "trim_max_year": { "sDrive30i": 2024 },
       "msrp": {
         "2023": { "sDrive30i": 46400, "xDrive30i": 48400, "M40i": 62900 },

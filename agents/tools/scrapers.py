@@ -366,6 +366,11 @@ def _parse_cargurus_blade(text: str, href: str, expected_model: str | None = Non
     rest = " ".join(parts[2:])
     model = parts[2]
     if expected_model:
+        # Reject if the base model name doesn't match (e.g. "UX" tile on NX 350h page).
+        expected_base = expected_model.split()[0].lower()
+        actual_base = parts[2].lower() if len(parts) > 2 else ""
+        if actual_base != expected_base:
+            return None
         # If the page is a Hybrid model but the listing text doesn't say Hybrid,
         # this is a sponsored cross-variant listing — reject it.
         if "hybrid" in expected_model.lower() and "hybrid" not in name_line.lower() and "hybrid" not in text.lower():
@@ -621,18 +626,38 @@ async def _scrape_carscom_async(zip_code, makes, max_price, max_mileage, min_yea
     url = (
         f"https://www.cars.com/shopping/results/?stock_type=used"
         f"&{'&'.join(make_params)}&{'&'.join(model_params)}"
-        f"&zip={zip_code}&distance={radius}"
+        f"&zip={zip_code}&maximum_distance={radius}"
         f"&maximum_price={max_price}&maximum_mileage={max_mileage}"
         f"&year_min={min_year}{year_max_filter}&sort=best_match_desc{history_filter}"
     )
 
     async def _fetch_cards(page):
+        # data-listing-id moved to child FUSE-SAVE elements inside FUSE-CARD parent
+        # that holds data-vehicle-details. Walk up from each [data-listing-id] to find details.
         return await page.evaluate("""() => {
-            return Array.from(document.querySelectorAll('[data-listing-id][data-vehicle-details]')).map(el => ({
-                id: el.getAttribute('data-listing-id'),
-                details: el.getAttribute('data-vehicle-details'),
-                text: (el.innerText || '').slice(0, 300)
-            })).filter(c => c.id && c.details);
+            const seen = new Set();
+            const results = [];
+            for (const el of document.querySelectorAll('[data-listing-id]')) {
+                const id = el.getAttribute('data-listing-id');
+                if (seen.has(id)) continue;
+                seen.add(id);
+                let detailsEl = el.hasAttribute('data-vehicle-details') ? el : null;
+                if (!detailsEl) {
+                    let p = el.parentElement;
+                    for (let i = 0; i < 5 && p; i++) {
+                        if (p.hasAttribute('data-vehicle-details')) { detailsEl = p; break; }
+                        p = p.parentElement;
+                    }
+                }
+                if (!detailsEl) detailsEl = el.querySelector('[data-vehicle-details]');
+                if (!detailsEl) continue;
+                results.push({
+                    id,
+                    details: detailsEl.getAttribute('data-vehicle-details'),
+                    text: (detailsEl.innerText || el.innerText || '').slice(0, 300)
+                });
+            }
+            return results.filter(c => c.details);
         }""")
 
     async def _scrape_carscom_page(page, page_url: str) -> list[dict]:

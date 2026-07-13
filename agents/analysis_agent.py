@@ -48,6 +48,15 @@ def run() -> dict:
         score_rows.append((lid, score, gb_price, json.dumps(explanation) if explanation else None))
         to_activate.append(lid)
 
+    # Remove stale scores for listings we can no longer score (e.g. null mileage)
+    scored_ids = {lid for lid, *_ in score_rows}
+    unscored_ids = [lid for lid in to_activate if lid not in scored_ids]
+    if unscored_ids:
+        execute(
+            "DELETE FROM listing_scores WHERE listing_id = ANY(%s::uuid[])",
+            (unscored_ids,),
+        )
+
     # Batch upsert scores
     execute_values(
         """INSERT INTO listing_scores

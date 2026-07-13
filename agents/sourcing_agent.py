@@ -180,7 +180,7 @@ def _is_valid(listing: dict, min_year: int, allowed_makes: list[str],
         # Reject rental/fleet usage: >14k miles/year indicates commercial use
         if mileage is not None and year is not None:
             years_old = max(1, datetime.now().year - int(year) + 1)
-            if mileage / years_old > 14_000:
+            if mileage / years_old > 15_000:
                 return False
     trim = listing.get("trim")
     if not is_trim_allowed(make, model, trim):

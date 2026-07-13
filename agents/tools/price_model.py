@@ -51,7 +51,7 @@ class StackedModel:
         X = np.array(X)
         base = np.column_stack([
             self.gb.predict(X),
-            self.knn.predict(X),
+            self.knn.predict(X[:, _KNN_FEATURE_COLS]),
             self.ridge.predict(X),
         ])
         return base @ self.meta_weights
@@ -83,7 +83,7 @@ _TRIM_LEVELS: dict[str, dict[str, int]] = {
     "tucson hybrid":    {"blue": 1, "sel": 2, "sel convenience": 3, "n line": 4, "limited": 5, "sel n-line": 4},
     "sportage hybrid":  {"lx": 1, "ex": 2, "sx": 3, "sx prestige": 4, "x-line": 4, "x-pro": 5, "x-pro prestige": 6, "prestige": 4},
     "sportage phev":    {"ex": 1, "ex premium": 2, "x-line": 3, "x-line prestige": 4, "sx": 5},
-    "gv70":             {"standard": 1, "select": 2, "advanced": 3, "sport prestige": 4},
+    "gv70":             {"standard": 1, "select": 2, "advanced": 3, "advanced plus": 3.5, "sport prestige": 4},
     "tiguan":           {"s": 1, "se": 2, "se r-line": 3, "se r-line black": 4, "sel": 4, "sel premium": 5, "sel r-line black": 5},
     "envision":         {"preferred": 1, "sport touring": 2, "avenir": 3},
     "x1":               {"sdrive28i": 1, "xdrive28i": 2},
@@ -354,6 +354,9 @@ def _make_gb_pipeline() -> Pipeline:
 _make_pipeline = _make_gb_pipeline
 
 
+_KNN_FEATURE_COLS = slice(0, 4)  # [year, log_mileage, trim_premium, drivetrain]
+
+
 def _make_knn_pipeline(n: int) -> Pipeline:
     k = min(7, max(3, n // 10))
     return Pipeline([
@@ -450,11 +453,13 @@ def load_training_data_for(model_name: str, powertrain_filter: str | None = None
 
     max_yr_sql = f"AND year <= {target_max}" if target_max else ""
     listing_rows = fetch_all(f"""
-        SELECT make, model, year, mileage, price, trim, (insights->>'cpo')::boolean AS cpo, raw FROM listings
+        SELECT make, model, year, mileage, price, trim, drivetrain,
+               (insights->>'cpo')::boolean AS cpo, raw FROM listings
         WHERE price IS NOT NULL AND mileage IS NOT NULL
           AND condition = 'used' AND price BETWEEN 20000 AND {max_price}
           AND mileage BETWEEN 100 AND 80000 AND lower(model) = %s
           AND year >= %s {max_yr_sql}
+          AND status NOT IN ('new', 'active')
     """, (key, effective_min))
     rows = list(train_rows) + list(listing_rows)
     # For split models, filter listings by detected powertrain
@@ -495,12 +500,13 @@ def _fit_stacked(model_name: str, X: list, y: list, label: str, pkl_path: str, s
     n_splits = max(2, min(5, n // 6))
     kf  = KFold(n_splits=n_splits, shuffle=True, random_state=42)
     oof = np.zeros((n, 3))
+    X_knn = X_arr[:, _KNN_FEATURE_COLS]
     for tr_idx, val_idx in kf.split(X_arr):
         X_tr, X_val = X_arr[tr_idx], X_arr[val_idx]
         y_tr = y_arr[tr_idx]
-        gb_pipe.fit(X_tr, y_tr);    oof[val_idx, 0] = gb_pipe.predict(X_val)
-        knn_pipe.fit(X_tr, y_tr);   oof[val_idx, 1] = knn_pipe.predict(X_val)
-        ridge_pipe.fit(X_tr, y_tr); oof[val_idx, 2] = ridge_pipe.predict(X_val)
+        gb_pipe.fit(X_tr, y_tr);                           oof[val_idx, 0] = gb_pipe.predict(X_val)
+        knn_pipe.fit(X_knn[tr_idx], y_tr);                 oof[val_idx, 1] = knn_pipe.predict(X_knn[val_idx])
+        ridge_pipe.fit(X_tr, y_tr);                        oof[val_idx, 2] = ridge_pipe.predict(X_val)
 
     # Meta Ridge: positive weights, no intercept → convex-ish blend
     meta = Ridge(alpha=10.0, fit_intercept=False, positive=True)
@@ -516,7 +522,7 @@ def _fit_stacked(model_name: str, X: list, y: list, label: str, pkl_path: str, s
 
     # Refit base models on full data
     gb_pipe.fit(X_arr, y_arr)
-    knn_pipe.fit(X_arr, y_arr)
+    knn_pipe.fit(X_knn, y_arr)
     ridge_pipe.fit(X_arr, y_arr)
 
     stacked = StackedModel(gb=gb_pipe, knn=knn_pipe, ridge=ridge_pipe,
@@ -580,7 +586,10 @@ def predict_fair_price(listing: dict) -> tuple[int, float] | tuple[None, None]:
 
     Returns (fair_price, residual_std) — both None if no model available.
     residual_std is the OOF residual std dev used to normalise the deal score.
+    Returns (None, None) if mileage is unknown — can't reliably score without it.
     """
+    if listing.get("mileage") is None:
+        return None, None
     model_name = (listing.get("model") or "").lower().strip()
     features   = [_to_features(listing)]
 
@@ -713,7 +722,7 @@ def explain_listing(listing: dict) -> dict | None:
 
         gb_pred = gb_pred_val  # equals base_value + shap_vals.sum()
         if isinstance(pipe, StackedModel):
-            knn_pred = int(round(pipe.knn.predict(X_raw)[0]))
+            knn_pred = int(round(pipe.knn.predict(X_raw[:, _KNN_FEATURE_COLS])[0]))
             ridge_pred = int(round(pipe.ridge.predict(X_raw)[0]))
             meta_weights = [float(w) for w in pipe.meta_weights]
             residual_std = float(pipe.residual_std)
