@@ -755,7 +755,8 @@ async def _scrape_secureoffersites_async(inventory_url: str, brand: str) -> list
     clean = re.sub(r"[?&]page=\d+", "", inventory_url).rstrip("?&")
     sep = "&" if "?" in clean else "?"
 
-    _JS_EXTRACT = """() => {
+    # V1 template: Hyundai/Kia secureoffersites with .standard-inventory cards
+    _JS_EXTRACT_V1 = """() => {
         return Array.from(document.querySelectorAll('.standard-inventory')).map(el => {
             const a = el.querySelector('a[href]') || el;
             const href = a.href || a.getAttribute('href') || '';
@@ -776,6 +777,23 @@ async def _scrape_secureoffersites_async(inventory_url: str, brand: str) -> list
         });
     }"""
 
+    # V2 template: Genesis secureoffersites with a.srp-vehicle-box cards
+    _JS_EXTRACT_V2 = """() => {
+        return Array.from(document.querySelectorAll('a.srp-vehicle-box')).map(el => {
+            const href = el.getAttribute('href') || el.href || '';
+            const vinEl = el.querySelector('[data-vin]');
+            const vin = vinEl ? vinEl.getAttribute('data-vin') : null;
+            const img = el.querySelector('img[title]');
+            const title = img ? img.getAttribute('title') : '';
+            const text = el.textContent || '';
+            const priceM = text.match(/Your Price\\s*\\$([\\d,]+)/i);
+            const price = priceM ? parseInt(priceM[1].replace(/,/g, '')) : null;
+            const miM = text.match(/([\\d,]+)\\s*Miles/i);
+            const mileage = miM ? parseInt(miM[1].replace(/,/g, '')) : null;
+            return { vin, title, price, mileage, href };
+        });
+    }"""
+
     async with Stealth().use_async(async_playwright()) as p:
         browser, ctx = await _stealth_browser(p)
         page = await ctx.new_page()
@@ -783,13 +801,28 @@ async def _scrape_secureoffersites_async(inventory_url: str, brand: str) -> list
             await page.goto(f"{clean}{sep}page=1", wait_until="domcontentloaded", timeout=30_000)
             await page.wait_for_timeout(4_000)
 
+            # Detect which template is in use
+            v1_count = await page.evaluate("() => document.querySelectorAll('.standard-inventory').length")
+            v2_count = await page.evaluate("() => document.querySelectorAll('a.srp-vehicle-box').length")
+            js_extract = _JS_EXTRACT_V1 if v1_count > 0 else _JS_EXTRACT_V2
+
             max_page = 1
-            pag_links = await page.evaluate("""() => {
-                return Array.from(document.querySelectorAll('.pagination .page-link')).map(a => a.innerText.trim());
-            }""")
-            for t in pag_links:
-                if t.isdigit():
-                    max_page = max(max_page, int(t))
+            if v1_count > 0:
+                pag_links = await page.evaluate("""() => {
+                    return Array.from(document.querySelectorAll('.pagination .page-link')).map(a => a.innerText.trim());
+                }""")
+                for t in pag_links:
+                    if t.isdigit():
+                        max_page = max(max_page, int(t))
+            else:
+                # V2: pagination links have href="...&page=N"
+                pag_hrefs = await page.evaluate("""() => {
+                    return Array.from(document.querySelectorAll('a[href*="page="]')).map(a => a.getAttribute('href') || '');
+                }""")
+                for href in pag_hrefs:
+                    m = re.search(r'page=(\d+)', href)
+                    if m:
+                        max_page = max(max_page, int(m.group(1)))
 
             listings: list[dict] = []
             seen_vins: set[str] = set()
@@ -798,7 +831,7 @@ async def _scrape_secureoffersites_async(inventory_url: str, brand: str) -> list
                 if pg > 1:
                     await page.goto(f"{clean}{sep}page={pg}", wait_until="domcontentloaded", timeout=20_000)
                     await page.wait_for_timeout(3_000)
-                items = await page.evaluate(_JS_EXTRACT)
+                items = await page.evaluate(js_extract)
                 for item in items:
                     vin = item.get("vin")
                     if vin and vin in seen_vins:

@@ -85,6 +85,7 @@ _TRIM_LEVELS: dict[str, dict[str, int]] = {
     "sportage phev":    {"ex": 1, "ex premium": 2, "x-line": 3, "x-line prestige": 4, "sx": 5},
     "gv70":             {"standard": 1, "select": 2, "advanced": 3, "advanced plus": 3.5, "sport prestige": 4},
     "tiguan":           {"s": 1, "se": 2, "se r-line": 3, "se r-line black": 4, "sel": 4, "sel premium": 5, "sel r-line black": 5},
+    "encore gx":        {"preferred": 1, "sport touring": 2, "avenir": 3},
     "envision":         {"preferred": 1, "sport touring": 2, "avenir": 3},
     "x1":               {"sdrive28i": 1, "xdrive28i": 2},
     "x3":               {"sdrive30i": 1, "xdrive30i": 2},
@@ -93,6 +94,7 @@ _TRIM_LEVELS: dict[str, dict[str, int]] = {
     "xc40":             {"core": 1, "plus": 2, "ultimate": 3},
     "xc60":             {"core": 1, "plus": 2, "ultimate": 3},
     "xc60 recharge":   {"core": 1, "plus": 2, "ultimate": 3},
+    "q5":               {"premium": 1, "premium plus": 2, "prestige": 3},
 }
 
 _ALL_MODELS = list(_TRIM_LEVELS.keys())
@@ -259,6 +261,7 @@ _TRIM_DRIVETRAIN: dict[tuple[str, str, str], str] = {
     ("volkswagen", "tiguan",          "sel r-line"): "awd",  # SEL R-Line is 4MOTION AWD only
     ("kia",        "sportage hybrid", "x-line"):     "awd",  # X-Line is AWD-only across all years
     ("kia",        "sportage hybrid", "sx prestige"):"awd",  # SX Prestige is AWD-only across all years
+    ("kia",        "sportage hybrid", "lx"):         "fwd",  # LX is FWD-only across all years
 }
 
 # Model-year combinations where drivetrain is known regardless of trim text.
@@ -276,6 +279,7 @@ _DRIVETRAIN_DEFAULTS: dict[tuple[str, str, int], str] = {
     ("volvo",   "xc60 recharge",  2023): "awd",  # XC60 Recharge T8 eAWD
     ("volvo",   "xc40",           2024): "awd",  # 2024+ XC40: B4 FWD dropped, all variants AWD
     # XC40 2023: B4=FWD, B5 FWD or AWD — detect from raw trim text
+    ("audi",    "q5",             2022): "awd",  # Q5 is always quattro AWD in US market
 }
 
 
@@ -384,6 +388,7 @@ _PLATFORM_MIN_YEAR: dict[str, int] = {
     "sportagephev":   2023,  # PHEV also on NQ5 platform (launched 2023)
     "gv70":            2022,  # JX1 platform launched 2022 for US
     "tiguan":          2022,  # MK2 LCI refresh 2022 (new interior/features)
+    "encoregx":        2024,  # 2024 refresh changed trims (Preferred/Sport Touring/Avenir); pre-2024 is different lineup
     "envision":        2021,  # 2nd gen launched 2021; 2020 is first gen
     "x1":              2023,  # U11 gen launched 2023; F48 (2016-2022) is a different car
     "x3":              2022,  # G01 LCI refresh 2022
@@ -392,6 +397,7 @@ _PLATFORM_MIN_YEAR: dict[str, int] = {
     "xc40":            2023,  # CMA platform refresh; 2022 and earlier is a different gen
     "xc60":            2023,  # SPA platform refresh for 2023+
     "xc60recharge":   2023,  # Recharge T8 PHEV also on SPA refresh platform
+    "q5":              2022,  # B9.5 refresh launched 2021; 2022+ is stable gen target
 }
 
 

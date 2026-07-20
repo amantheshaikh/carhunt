@@ -122,6 +122,8 @@ def _insert(rows: list[dict], allowed_norm: set[str], min_year: int | None = Non
             continue
         if price < 20000:
             continue  # exclude lemon/salvage/fleet-priced cars
+        if not miles or miles < 500:
+            continue  # exclude near-new dealer inventory (listed as "used" but priced at MSRP)
         years_old = _CURR_YEAR - int(year) + 1
         if miles and year and years_old > 0 and (miles / years_old) > 14000:
             continue  # >14k miles/year likely rental/fleet usage

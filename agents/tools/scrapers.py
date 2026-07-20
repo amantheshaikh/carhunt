@@ -719,6 +719,8 @@ async def _scrape_carscom_async(zip_code, makes, max_price, max_mileage, min_yea
                         (r for r in ("Great Deal", "Good Deal", "Fair Deal", "High Price", "Overpriced")
                          if r in card["text"]), None
                     )
+                    drive_type = d.get("driveType") or ""
+                    raw_text = " ".join(filter(None, [card["text"][:400], drive_type]))
                     listings.append({
                         "source": "carscom",
                         "condition": "used",
@@ -738,7 +740,7 @@ async def _scrape_carscom_async(zip_code, makes, max_price, max_mileage, min_yea
                         "photos_url": [],
                         "title_status": "clean",
                         "accident_count": 0,
-                        "raw": {"text": card["text"][:400], "deal_rating": deal_rating},
+                        "raw": {"text": raw_text, "deal_rating": deal_rating},
                     })
                 except Exception as e:
                     print(f"  [carscom] card parse error (id={lid}): {e}", flush=True)
@@ -772,15 +774,20 @@ _SALVAGE_PATTERNS = [
     r"salvage\s+title", r"rebuilt\s+title", r"flood\s+damage",
 ]
 
+# Patterns that confirm a lemon/buyback title — each uses a negative lookbehind for "no "
+# to avoid false positives from Carfax widgets that print "No Lemon Law Buyback Reported".
 _LEMON_PATTERNS = [
-    r"lemon\s+title", r"reported\s+as\s+lemon", r"lemon\s+law",
-    r"manufacturer\s+buyback", r"buyback\s+vehicle",
+    r"lemon\s+title",
+    r"reported\s+as\s+lemon",
+    r"(?<!no\s)(?<!not\s)manufacturer\s+buyback",
+    r"(?<!no\s)buyback\s+vehicle",
     r"mechanical\s+or\s+manufacturing\s+defect",
 ]
 
 
 def _parse_history(text: str) -> dict:
-    """Extract accident count, title status, owner count, and mileage from page text."""
+    """Extract accident count, title status, owner count, mileage, and drivetrain from page text."""
+    from tools.scoring import detect_drivetrain
     text_lower = text.lower()
 
     accident_count = None
@@ -816,11 +823,17 @@ def _parse_history(text: str) -> dict:
                 mileage = candidate
                 break
 
+    # Drivetrain: VDP "Features & specs" section typically contains e.g.
+    # "Front-wheel Drive drivetrain" or "All-Wheel Drive drivetrain"
+    dt = detect_drivetrain(None, None, text_lower)
+    drivetrain = dt if dt != "unknown" else None
+
     return {
         "accident_count": accident_count,
         "title_status": title_status,
         "owner_count": owner_count,
         "mileage": mileage,
+        "drivetrain": drivetrain,
     }
 
 
@@ -950,7 +963,7 @@ async def _enrich_detail_async(pairs: list[tuple[str, str, list[str] | None]], r
                 trim_note = f" trim={insights['trim']!r}" if insights.get("trim") else ""
                 print(f"    [{ext_id}] accidents={data['accident_count']} "
                       f"title={data['title_status']} owners={data['owner_count']} "
-                      f"mileage={data['mileage']}"
+                      f"mileage={data['mileage']} drivetrain={data.get('drivetrain')}"
                       + (f" cpo={insights.get('cpo')} pkgs={len(insights.get('packages',[]))}{trim_note}" if insights else ""),
                       flush=True)
             except Exception as e:
@@ -999,6 +1012,10 @@ def enrich_listings_from_detail(listings: list[dict]) -> list[dict]:
         # Explicit None check — truthy check would treat mileage=0 as "not provided".
         if data.get("mileage") is not None and listing.get("mileage") is None:
             listing["mileage"] = data["mileage"]
+        # Upgrade "unknown" drivetrain using the explicit drivetrain line from the VDP
+        # "Features & specs" section (e.g. "Front-wheel Drive drivetrain").
+        if data.get("drivetrain") and listing.get("drivetrain", "unknown") == "unknown":
+            listing["drivetrain"] = data["drivetrain"]
         if data.get("insights"):
             existing = listing.get("insights") or {}
             llm = data["insights"]

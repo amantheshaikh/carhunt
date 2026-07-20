@@ -53,10 +53,21 @@
       "cargurus_search_path": "m55/d1104,m55,m55/d1104/SE FWD,m55/d1104/SE 4Motion,m55/d1104/SE R-Line Black 4Motion,m55/d1104/SE R-Line Black FWD,m55/d1104/SEL R-Line 4Motion,m55/d1104/SEL R-Line Turbo 4Motion",
       "trims": ["SE", "SEL R-Line", "SE R-Line Black"],
       "training_trims": ["S", "SE", "SE R-Line Black", "SEL R-Line"],
-      "min_year": 2025,
+      "min_year": 2025, "max_year": 2025,
       "msrp": {
         "2025": { "S": 31000, "SE": 32295, "SE AWD": 35970, "SE R-Line Black": 35455, "SE R-Line Black AWD": 36955, "SEL R-Line": 41180 },
         "2026": { "S": 31000, "SE": 35080, "SE AWD": 36580, "SE R-Line Black": 38240, "SE R-Line Black AWD": 39740, "SEL R-Line": 44560 }
+      }
+    },
+    {
+      "make": "Buick", "model": "Encore GX", "cargurus_id": "d2901",
+      "cargurus_search_path": "m21/d2901",
+      "trims": ["Avenir"],
+      "training_trims": ["Preferred", "Sport Touring", "Avenir"],
+      "min_year": 2024,
+      "msrp": {
+        "2024": { "Preferred": 25600, "Sport Touring": 26800, "Avenir": 31900 },
+        "2025": { "Preferred": 26895, "Sport Touring": 28095, "Avenir": 33195 }
       }
     },
     {
@@ -148,6 +159,18 @@
         "2022": { "Premium": 44785, "Luxury": 49985, "F SPORT Handling": 48550 },
         "2023": { "Premium": 46815, "Luxury": 51985, "F SPORT Handling": 50650 },
         "2024": { "Premium": 49185, "Luxury": 54355, "F SPORT Handling": 53020 }
+      }
+    },
+    {
+      "make": "Audi", "model": "Q5", "cargurus_id": "d1988",
+      "cargurus_search_path": "m19/d1988",
+      "trims": ["Premium", "Premium Plus", "Prestige"],
+      "min_year": 2022, "max_year": 2025,
+      "msrp": {
+        "2022": { "Premium": 43300, "Premium Plus": 51100, "Prestige": 57700 },
+        "2023": { "Premium": 43900, "Premium Plus": 49000, "Prestige": 55700 },
+        "2024": { "Premium": 44600, "Premium Plus": 49400, "Prestige": 54900 },
+        "2025": { "Premium": 45400, "Premium Plus": 51100, "Prestige": 54700 }
       }
     }
   ]

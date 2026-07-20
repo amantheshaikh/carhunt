@@ -37,18 +37,20 @@ carhunt/
 
 | Make | Model | CarGurus ID | Allowed Trims | Year Constraints |
 |---|---|---|---|---|
-| Hyundai | Tucson Hybrid | d3141 | SEL Convenience, N Line (≤2025), Limited | 2025–2026 |
+| Hyundai | Tucson Hybrid | d3141 | SEL Convenience, N Line, Limited | 2025+ |
 | Genesis | GV70 | d3163 | Advanced, Advanced Plus, Sport Prestige (2.5T only) | 2023–2025 |
 | Kia | Sportage Hybrid | d3239 | EX, X-Line, SX Prestige | 2023+ |
 | Kia | Sportage PHEV | d3244 | EX, EX Premium, X-Line, X-Line Prestige, SX | 2023–2025 |
-| Volkswagen | Tiguan | d1104 | SE, SEL R-Line, SE R-Line Black | 2025–2026 |
+| Volkswagen | Tiguan | d1104 | SE, SEL R-Line, SE R-Line Black | 2025 |
+| Buick | Encore GX | d2901 | Avenir | 2024+ |
 | Buick | Envision | d2398 | Preferred, Sport Touring, Avenir | 2024–2025 |
 | BMW | X1 | d2160 | xDrive28i (always AWD) | 2023–2025 |
-| BMW | X3 | d392 | sDrive30i (≤2024), xDrive30i | 2023–2025 |
+| BMW | X3 | d392 | sDrive30i (≤2024), xDrive30i | 2022–2025 |
 | Cadillac | XT4 | d2673 | Luxury, Premium Luxury, Sport | 2024–2025 |
 | Lexus | NX 350h | d2294 | Premium, Luxury, F SPORT | 2022–2024 |
 | Volvo | XC40 | d2624 | Plus, Ultimate (B4 FWD or B5 AWD) | 2023–2025 |
 | Volvo | XC60 | d1629 | Plus, Ultimate (B5 gas or Recharge T8 PHEV) | 2023–2025 |
+| Audi | Q5 | d1988 | Premium, Premium Plus, Prestige | 2022–2025 |
 
 **Search params** (stored in `user_settings` DB table):
 - Zip: 30328 · Radius: 100 mi · Max price: $45k · Years: 2025–2026
@@ -56,11 +58,13 @@ carhunt/
 
 **CarGurus IDs** are model-specific page identifiers. The new search format uses `cargurus_search_path` (make/model/trim paths encoded as `m{makeId}/d{modelId}/trimName`).
 
-**Make IDs:** Hyundai=m28, Genesis=m203, Kia=m33, VW=m55, Buick=m21, BMW=m3, Cadillac=m22, Lexus=m37, Volvo=m56
+**Make IDs:** Hyundai=m28, Genesis=m203, Kia=m33, VW=m55, Buick=m21, BMW=m3, Cadillac=m22, Lexus=m37, Volvo=m56, Audi=m19
 
 **Notes:**
 - BMW X1 2023–2025: xDrive28i only (always AWD). sDrive28i and M35i excluded.
-- BMW X3 2023–2025: sDrive30i (RWD, ≤2024 only), xDrive30i (AWD). M40i excluded.
+- BMW X3 2022–2025: sDrive30i (RWD, ≤2024 only), xDrive30i (AWD). M40i excluded.
+- Buick Encore GX: Avenir trim only (top trim, always AWD). 2024+.
+- Audi Q5: Premium/Premium Plus/Prestige, 2022–2025. FWD or Quattro AWD.
 - Lexus NX 350h 2022–2024: always AWD. Trim allowlist filters out NX 450h+ variants.
 - Volvo XC40: B4 = FWD, B5 = AWD (detected from trim text). No Recharge electric.
 - Volvo XC60: includes both B5 gas/MHEV (AWD) and Recharge T8 PHEV (eAWD). Stored as separate model names `"XC60"` and `"XC60 Recharge"` in the DB. `detect_powertrain` uses "recharge" keyword to classify PHEV.
