@@ -180,7 +180,7 @@ def _is_valid(listing: dict, min_year: int, allowed_makes: list[str],
         # Reject rental/fleet usage: >14k miles/year indicates commercial use
         if mileage is not None and year is not None:
             years_old = max(1, datetime.now().year - int(year) + 1)
-            if mileage / years_old > 15_000:
+            if mileage / years_old > 14_000:
                 return False
     trim = listing.get("trim")
     if not is_trim_allowed(make, model, trim):
@@ -265,6 +265,12 @@ def _touch_existing(source: str, external_id: str, new_price: int, old_price: in
                 cur.execute(
                     "UPDATE listings SET last_seen_at = now(), price = %s WHERE source = %s AND external_id = %s",
                     (new_price, source, external_id),
+                )
+                # Re-activate listings the user marked expired if they've come back on market.
+                # Don't touch 'purchased' or 'dismissed' — those are intentional user states.
+                cur.execute(
+                    "UPDATE listings SET status = 'active' WHERE source = %s AND external_id = %s AND status = 'expired'",
+                    (source, external_id),
                 )
                 if price_changed:
                     cur.execute(
