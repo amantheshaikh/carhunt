@@ -351,6 +351,14 @@ def process_source(
         if not _is_valid(listing, min_year, makes, allowed_models, max_year, max_price, max_mileage, radius):
             skipped_count += 1
             continue
+        # Check same-source ext_id FIRST so price updates always reach _touch_existing,
+        # even when the listing URL is already in _known_urls (which would otherwise
+        # short-circuit the ext_id check and silently drop price drops).
+        ext_id = str(listing["external_id"])
+        if ext_id in known:
+            existing.append((source, ext_id, listing["price"], known[ext_id]))
+            continue
+        # New ext_id — apply cross-source dedup before treating as a candidate.
         vin = listing.get("vin")
         if vin and vin in _known_vins:
             skipped_count += 1
@@ -367,11 +375,7 @@ def process_source(
         if url and url in _known_urls:
             skipped_count += 1
             continue
-        ext_id = str(listing["external_id"])
-        if ext_id not in known:
-            candidates.append(listing)
-        else:
-            existing.append((source, ext_id, listing["price"], known[ext_id]))
+        candidates.append(listing)
 
     # Pass 2: enrich new candidates with detail-page data.
     # Required sources (cargurus, carscom): accident/title come only from the detail page,
@@ -496,6 +500,11 @@ def run(run_id: str = "", force: bool = False) -> dict:
                 if not _is_valid(listing, min_year, makes, allowed_models, max_year, max_price, max_mileage, radius):
                     dealer_skipped += 1
                     continue
+                # Check same-source ext_id first so price drops always reach _touch_existing.
+                ext_id = str(listing["external_id"])
+                if ext_id in known_dealer:
+                    _touch_existing("dealer", ext_id, listing["price"], known_dealer[ext_id])
+                    continue
                 vin = listing.get("vin")
                 if vin and vin in shared_known_vins:
                     dealer_skipped += 1
@@ -512,11 +521,7 @@ def run(run_id: str = "", force: bool = False) -> dict:
                 if all(v is not None for v in dfp) and dfp in known_dealer_dfps:
                     dealer_skipped += 1
                     continue
-                ext_id = str(listing["external_id"])
-                if ext_id not in known_dealer:
-                    new_dealer_listings.append(listing)
-                else:
-                    _touch_existing("dealer", ext_id, listing["price"], known_dealer[ext_id])
+                new_dealer_listings.append(listing)
 
             if new_dealer_listings:
                 print(f"  [dealer] Fetching VDP insights for {len(new_dealer_listings)} new listing(s)...", flush=True)
