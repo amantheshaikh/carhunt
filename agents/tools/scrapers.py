@@ -628,7 +628,8 @@ async def _scrape_carscom_async(zip_code, makes, max_price, max_mileage, min_yea
         f"&{'&'.join(make_params)}&{'&'.join(model_params)}"
         f"&zip={zip_code}&maximum_distance={radius}"
         f"&maximum_price={max_price}&maximum_mileage={max_mileage}"
-        f"&year_min={min_year}{year_max_filter}&sort=best_match_desc{history_filter}"
+        f"&year_min={min_year}{year_max_filter}&sort=best_match_desc"
+        f"&include_shippable=false{history_filter}"
     )
 
     async def _fetch_cards(page):

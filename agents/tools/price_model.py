@@ -427,7 +427,7 @@ def load_training_data_for(model_name: str, powertrain_filter: str | None = None
                    PERCENTILE_CONT(0.97) WITHIN GROUP (ORDER BY cte.price)::int AS p97
             FROM price_training_data cte
             WHERE lower(cte.model) = %s
-              AND cte.price BETWEEN 20000 AND {max_price} AND cte.mileage BETWEEN 100 AND 80000
+              AND cte.price BETWEEN 20000 AND {max_price} AND cte.mileage BETWEEN 2000 AND 80000
               AND cte.year >= %s {cte_max_yr}
               AND (cte.year IS NULL OR cte.mileage::float / GREATEST(1, %s - cte.year + 1) <= 14000)
               {cte_pt_sql}
@@ -439,7 +439,7 @@ def load_training_data_for(model_name: str, powertrain_filter: str | None = None
                    PERCENTILE_CONT(0.97) WITHIN GROUP (ORDER BY cte.price)::int AS p97
             FROM price_training_data cte
             WHERE lower(cte.model) = %s
-              AND cte.price BETWEEN 20000 AND {max_price} AND cte.mileage BETWEEN 100 AND 80000
+              AND cte.price BETWEEN 20000 AND {max_price} AND cte.mileage BETWEEN 2000 AND 80000
               AND cte.year >= %s {cte_max_yr}
               AND (cte.year IS NULL OR cte.mileage::float / GREATEST(1, %s - cte.year + 1) <= 14000)
               {cte_pt_sql}
@@ -450,7 +450,7 @@ def load_training_data_for(model_name: str, powertrain_filter: str | None = None
         CROSS JOIN global_bounds gb
         WHERE lower(ptd.model) = %s
           AND ptd.price IS NOT NULL AND ptd.mileage IS NOT NULL
-          AND ptd.price BETWEEN 20000 AND {max_price} AND ptd.mileage BETWEEN 100 AND 80000
+          AND ptd.price BETWEEN 20000 AND {max_price} AND ptd.mileage BETWEEN 2000 AND 80000
           AND ptd.year >= %s {join_max_yr}
           AND ptd.mileage::float / GREATEST(1, %s - ptd.year + 1) <= 14000
           AND ptd.price BETWEEN COALESCE(pb.p10, gb.p10) AND COALESCE(pb.p97, gb.p97)
@@ -463,7 +463,7 @@ def load_training_data_for(model_name: str, powertrain_filter: str | None = None
                (insights->>'cpo')::boolean AS cpo, raw FROM listings
         WHERE price IS NOT NULL AND mileage IS NOT NULL
           AND condition = 'used' AND price BETWEEN 20000 AND {max_price}
-          AND mileage BETWEEN 100 AND 80000 AND lower(model) = %s
+          AND mileage BETWEEN 2000 AND 80000 AND lower(model) = %s
           AND year >= %s {max_yr_sql}
           AND status NOT IN ('new', 'active')
     """, (key, effective_min))

@@ -154,6 +154,7 @@
       "make": "Lexus", "model": "NX 350h", "cargurus_id": "d2294",
       "cargurus_search_path": "m37,m37/d2294,m37/d2294/350h AWD,m37/d2294/350h Premium AWD,m37/d2294/350h Luxury AWD,m37/d2294/350h F SPORT Handling AWD",
       "trims": ["Premium", "Luxury", "F SPORT"],
+      "engine_filter": ["350h"],
       "min_year": 2022, "max_year": 2024,
       "msrp": {
         "2022": { "Premium": 44785, "Luxury": 49985, "F SPORT Handling": 48550 },

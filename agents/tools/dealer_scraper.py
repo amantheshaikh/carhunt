@@ -250,6 +250,128 @@ async def _scrape_cobalt_async(inventory_url: str, brand: str,
 
 
 # ---------------------------------------------------------------------------
+# Dealer.com (DDC) SSR inventory pages
+# Some DDC sites (e.g. Rick Case Hyundai Atlanta) no longer fire getInventory
+# XHR — inventory is pre-rendered as SSR HTML using li.vehicle-card elements.
+# We paginate via ?start=N and parse the DOM directly.
+# ---------------------------------------------------------------------------
+
+async def _scrape_cobalt_dom_async(inventory_url: str, brand: str,
+                                    makes: list[str] | None = None,
+                                    min_year: int = 0, max_year: int | None = None) -> list[dict]:
+    from urllib.parse import urlparse, urlencode, parse_qs
+
+    inventory: list[dict] = []
+    seen_vins: set[str] = set()
+    is_cpo_page = "certified" in inventory_url.lower()
+
+    # Add make/year server-side filters (DDC SSR supports standard query params)
+    filtered_url = _build_dealer_com_url(inventory_url, makes, min_year, max_year)
+
+    async with Stealth().use_async(async_playwright()) as p:
+        browser, ctx = await _stealth_browser(p)
+        page = await ctx.new_page()
+
+        try:
+            start = 0
+            page_size = 24  # DDC SSR default
+
+            while True:
+                parsed = urlparse(filtered_url)
+                params = parse_qs(parsed.query, keep_blank_values=True)
+                params["start"] = [str(start)]
+                page_url = f"{parsed.scheme}://{parsed.netloc}{parsed.path}?{urlencode(params, doseq=True)}"
+
+                await page.goto(page_url, wait_until="domcontentloaded", timeout=30_000)
+                await page.wait_for_timeout(2_500)
+
+                cards_data = await page.evaluate("""() => {
+                    const cards = [...document.querySelectorAll('li.vehicle-card')];
+                    return cards.map(card => {
+                        // Title: first line matching "YYYY Make ..." pattern
+                        const bodyText = card.innerText || '';
+                        const titleLine = bodyText.split('\\n')
+                            .map(l => l.trim())
+                            .find(l => /^\\d{4}\\s+[A-Z]/.test(l)) || '';
+
+                        // VIN from roadster button or any data-vin attr
+                        const vinEl = card.querySelector('[data-vin]');
+                        const vin = vinEl?.getAttribute('data-vin') || null;
+
+                        // Mileage
+                        const mileageM = bodyText.match(/([\\d,]+)\\s*miles?/i);
+                        const mileage = mileageM ? mileageM[1].replace(/,/g, '') : null;
+
+                        // Sale Price: first .price-value span (advertised price before fees)
+                        const priceEl = card.querySelector('.price-value');
+                        const priceText = priceEl?.innerText?.trim() || '';
+                        const priceM = priceText.match(/[\\d,]+/);
+                        const price = priceM ? priceM[0].replace(/,/g, '') : null;
+
+                        // Detail URL
+                        const linkEl = card.querySelector('a[href*="/used/"],a[href*="/certified/"],a[href*="/pre-owned/"]')
+                            || card.querySelector('a[href$=".htm"]');
+                        const href = linkEl?.href || '';
+
+                        const isCpo = href.includes('/certified') ||
+                            bodyText.toLowerCase().includes('certified pre-owned');
+
+                        return { titleLine, vin, mileage, price, href, isCpo };
+                    });
+                }""")
+
+                if not cards_data:
+                    break
+
+                for card in cards_data:
+                    vin = card.get("vin")
+                    if vin and vin in seen_vins:
+                        continue
+
+                    title = card.get("titleLine", "").strip()
+                    if not title:
+                        continue
+
+                    year_s, make, model, trim = _parse_title(title)
+                    if not year_s or not make or not model:
+                        continue
+
+                    mileage = int(card["mileage"]) if card.get("mileage") else None
+                    price = int(card["price"]) if card.get("price") else None
+                    href = card.get("href") or inventory_url
+                    is_cpo = is_cpo_page or card.get("isCpo", False)
+
+                    if not price:
+                        continue
+
+                    ext_id = vin or re.sub(r'[^a-z0-9]', '', href.lower())[-20:]
+                    inventory.append(_make_listing(
+                        brand, ext_id,
+                        vin=vin, make=make, model=model, trim=trim or None,
+                        year=int(year_s) if year_s else None, body_type=None,
+                        mileage=mileage, price=price,
+                        listing_url=href, photos_url=[],
+                        dealer_name=brand,
+                        insights={"cpo": is_cpo} if is_cpo else None,
+                        raw={"title": title, "vin": vin, "price": price, "mileage": mileage},
+                    ))
+                    if vin:
+                        seen_vins.add(vin)
+
+                if len(cards_data) < page_size:
+                    break
+
+                start += page_size
+                if start > 1200:  # 50-page safety limit
+                    break
+
+        finally:
+            await browser.close()
+
+    return inventory
+
+
+# ---------------------------------------------------------------------------
 # DealerOn spaCosmos SPA
 # The SPA calls /api/vhcliaa/vehicle-pages/cosmos/srp/vehicles/{dealer_id}/{page_id}.
 # We intercept the first request to discover those IDs, then paginate via httpx.
@@ -1761,6 +1883,24 @@ def scrape_dealer(site: dict, makes: list[str] | None = None,
                     _scrape_cobalt_async(site["inventory_url"], site["brand"], makes, min_year, max_year),
                     timeout=150,
                 ))
+            elif cfg.get("type") == "cobalt_dom":
+                _add_used(_run_with_timeout(
+                    _scrape_cobalt_dom_async(site["inventory_url"], site["brand"], makes, min_year, max_year),
+                    timeout=150,
+                ))
+                # Probe certified inventory on DDC sites (separate URL path)
+                base = "/".join(site["inventory_url"].split("/")[:3])
+                cpo_url = f"{base}/certified-inventory/index.htm"
+                try:
+                    cpo_listings = _run_with_timeout(
+                        _scrape_cobalt_dom_async(cpo_url, site["brand"], makes, min_year, max_year),
+                        timeout=150,
+                    )
+                    if cpo_listings:
+                        print(f"    CPO: {len(cpo_listings)} listings at /certified-inventory/", flush=True)
+                        _add_used(cpo_listings)
+                except Exception:
+                    pass
             elif cfg.get("type") == "dealerinspire_algolia":
                 _add_used(_scrape_dealerinspire_algolia(
                     cfg["app_id"], cfg["api_key"], cfg["index"], site["brand"],
@@ -1830,16 +1970,19 @@ def scrape_all_dealers(makes: list[str] | None = None,
                        force: bool = False, update_cooldown: bool = True) -> list[dict]:
     """Scrape active dealer sites. force=True bypasses the 6h cooldown (used by training_collector).
     update_cooldown=False skips stamping last_scraped_at so the next sourcing refresh isn't blocked."""
+    # ridemotive sites use website_url + dealer_id and have no inventory_url — include them too
+    _active_filter = """is_active = true
+               AND (inventory_url IS NOT NULL OR scraper_config->>'type' = 'ridemotive')"""
     if force:
         sites = fetch_all(
-            """SELECT id, brand, name, inventory_url, last_scraped_at, scraper_config, website_url
-               FROM dealer_sites WHERE is_active = true AND inventory_url IS NOT NULL"""
+            f"""SELECT id, brand, name, inventory_url, last_scraped_at, scraper_config, website_url
+               FROM dealer_sites WHERE {_active_filter}"""
         )
         print(f"  [dealer] {len(sites)} site(s) (force mode — ignoring cooldown)", flush=True)
     else:
         sites = fetch_all(
-            """SELECT id, brand, name, inventory_url, last_scraped_at, scraper_config, website_url
-               FROM dealer_sites WHERE is_active = true AND inventory_url IS NOT NULL
+            f"""SELECT id, brand, name, inventory_url, last_scraped_at, scraper_config, website_url
+               FROM dealer_sites WHERE {_active_filter}
                AND (last_scraped_at IS NULL
                     OR last_scraped_at < now() - INTERVAL '%s hours')""",
             (DEALER_COOLDOWN_HOURS,),
