@@ -136,9 +136,6 @@ def _get_known_fingerprints(exclude_source: str) -> tuple[set[tuple], set[tuple]
     return price_fps, dealer_fps
 
 
-_normalize_model = _norm  # identical to base_trims._norm; alias avoids duplication
-
-
 def _is_valid(listing: dict, min_year: int, allowed_makes: list[str],
               allowed_models: list[str] | None = None, max_year: int | None = None,
               max_price: int | None = None, max_mileage: int | None = None,
@@ -190,8 +187,8 @@ def _is_valid(listing: dict, min_year: int, allowed_makes: list[str],
     if allowed_makes and make.lower() not in {m.lower() for m in allowed_makes}:
         return False
     if allowed_models:
-        normalized = _normalize_model(model)
-        if not any(_normalize_model(am) == normalized for am in allowed_models):
+        normalized = _norm(model)
+        if not any(_norm(am) == normalized for am in allowed_models):
             return False
     if year < min_year:
         return False

@@ -240,9 +240,9 @@ def _stage_groups(all_vehicles: list[tuple[str, str]], stage_min_year: int) -> d
     """Group vehicles by effective min_year for a given stage.
 
     Each group gets its own scraper call with an exact min_year so we never
-    fetch listings below a model's floor. Sportage Hybrid (min=2026) always
-    gets queried with min_year=2026 even in a 2023 stage, instead of fetching
-    and discarding 3 years of useless results.
+    fetch listings below a model's floor. Models whose floor is above the stage
+    min_year are skipped entirely (e.g. Sportage Hybrid min=2026 is skipped in
+    a 2023 stage — there are no valid listings to collect).
 
     Returns {effective_min_year: [(make, model), ...]} sorted ascending.
     Models above their max_year ceiling are excluded entirely.

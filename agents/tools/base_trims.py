@@ -4,6 +4,7 @@ Vehicle config loader. Single source of truth is agents/cars.json.
 import json
 import os
 import re
+import sys
 from typing import Optional
 
 _CONFIG_PATH = os.path.join(os.path.dirname(__file__), "..", "cars.json")
@@ -130,8 +131,6 @@ def _engine_filter_passes(v: dict, trim: str, source: str | None = None) -> bool
 # In-process cache: (make_lower, model_lower, trim_lower) → canonical or None.
 # Managed by canonical_trim; _llm_canonical_trim itself is a pure LLM call so
 # it can be monkeypatched in tests without breaking cache behaviour.
-import sys
-
 _CACHE_FILE = os.path.join(os.path.dirname(__file__), "..", ".trim_cache.json")
 _llm_trim_cache: dict[tuple[str, str, str], Optional[str]] = None
 
@@ -264,14 +263,13 @@ def is_trim_allowed(make: str, model: str, trim: str | None) -> bool:
         return True
 
     # Check for BMW token-reordering (e.g. "30 xDrive" -> xDrive30i)
-    import re as _re
     t_flat = t.replace(" ", "")
     for drive in ("xdrive", "sdrive"):
         if drive in t_flat:
-            num = _re.sub(r"[^0-9]", "", t_flat.replace(drive, ""))
+            num = re.sub(r"[^0-9]", "", t_flat.replace(drive, ""))
             for a in allowed:
                 a_flat = a.lower().replace(" ", "").replace("-", "")
-                if a_flat.startswith(drive) and _re.sub(r"[^0-9]", "", a_flat) == num:
+                if a_flat.startswith(drive) and re.sub(r"[^0-9]", "", a_flat) == num:
                     return True
     return False
 
@@ -371,14 +369,13 @@ def canonical_trim(make: str, model: str, trim: str | None) -> str | None:
             return allowed
     # Pass 2 — BMW token-reorder: "30 xDrive" → "xDrive30i", "xDrive30" → "xDrive30i"
     # Extract drive type and number from input, then match canonical trim with same pair.
-    import re as _re
     t_flat = t.replace(" ", "")
     for drive in ("xdrive", "sdrive"):
         if drive in t_flat:
-            num = _re.sub(r"[^0-9]", "", t_flat.replace(drive, ""))  # e.g. "30" from "30xdrive"
+            num = re.sub(r"[^0-9]", "", t_flat.replace(drive, ""))  # e.g. "30" from "30xdrive"
             for allowed in trims:
                 a_flat = allowed.lower().replace(" ", "").replace("-", "")
-                if a_flat.startswith(drive) and _re.sub(r"[^0-9]", "", a_flat) == num:
+                if a_flat.startswith(drive) and re.sub(r"[^0-9]", "", a_flat) == num:
                     return allowed
 
     # Pass 3 — whole-word substring match for formats like "B5 Plus Dark Theme AWD"
@@ -386,7 +383,7 @@ def canonical_trim(make: str, model: str, trim: str | None) -> str | None:
     # Sort longest-first for the same reason as Pass 1.
     for allowed in sorted(trims, key=len, reverse=True):
         a = allowed.lower().replace("-", " ")
-        if _re.search(r"\b" + _re.escape(a) + r"\b", t):
+        if re.search(r"\b" + re.escape(a) + r"\b", t):
             return allowed
 
     # Pass 4 — LLM fallback for abbreviations and non-standard dealer naming

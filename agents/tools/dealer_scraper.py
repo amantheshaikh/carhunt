@@ -19,9 +19,13 @@ API-based strategies (configured via scraper_config JSONB column):
 import asyncio
 import concurrent.futures
 import json
+import os
 import random
 import re
 import requests
+import sys
+from datetime import datetime
+from urllib.parse import urlparse, parse_qs, urlencode
 
 from playwright.async_api import async_playwright
 from playwright_stealth import Stealth
@@ -58,8 +62,6 @@ def _build_dealer_com_url(inventory_url: str, makes: list[str] | None, min_year:
     if not any(p in inventory_url for p in _DC_PATHS):
         return inventory_url
 
-    from urllib.parse import urlparse, parse_qs, urlencode
-    from datetime import datetime
     parsed = urlparse(inventory_url)
     params = parse_qs(parsed.query)
     
@@ -90,8 +92,6 @@ def _build_dealeron_url(inventory_url: str, makes: list[str] | None, min_year: i
     if "amazingluxurycars.com" in inventory_url:
         return inventory_url
 
-    from urllib.parse import urlparse, parse_qs, urlencode
-    from datetime import datetime
     parsed = urlparse(inventory_url)
     params = parse_qs(parsed.query)
     
@@ -259,8 +259,6 @@ async def _scrape_cobalt_async(inventory_url: str, brand: str,
 async def _scrape_cobalt_dom_async(inventory_url: str, brand: str,
                                     makes: list[str] | None = None,
                                     min_year: int = 0, max_year: int | None = None) -> list[dict]:
-    from urllib.parse import urlparse, urlencode, parse_qs
-
     inventory: list[dict] = []
     seen_vins: set[str] = set()
     is_cpo_page = "certified" in inventory_url.lower()
@@ -390,8 +388,6 @@ async def _scrape_dealeron_cosmos_async(inventory_url: str, brand: str,
                                          min_year: int = 0,
                                          max_year: int | None = None,
                                          cosmos_path: str | None = None) -> list[dict]:
-    from urllib.parse import urlparse, urlencode
-    from datetime import datetime
     import httpx
 
     base_url = "/".join(inventory_url.split("/")[:3])
@@ -1504,9 +1500,6 @@ def _get_known_models() -> list[str]:
         _KNOWN_MODELS = sorted(get_allowed_models(), key=len, reverse=True)
     return _KNOWN_MODELS
 
-
-import os
-import sys
 
 _llm_title_cache = None
 _TITLE_CACHE_FILE = os.path.join(os.path.dirname(__file__), "..", ".title_cache.json")

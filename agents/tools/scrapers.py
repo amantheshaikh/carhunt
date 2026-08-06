@@ -605,6 +605,9 @@ async def _scrape_cargurus_search_all_async(
 # Cars.com — vehicle-card DOM extraction
 # ---------------------------------------------------------------------------
 
+_CARSCOM_PAGE_SIZE   = 24  # Cars.com shows 24 listings per page
+_CARSCOM_MAX_PAGES   = 25  # cap at 600 listings per run (all 9 models combined)
+
 
 async def _scrape_carscom_async(zip_code, makes, max_price, max_mileage, min_year, radius=100,
                                  vehicles=None, clean_history=False, max_year=None):
@@ -840,8 +843,6 @@ def _parse_history(text: str) -> dict:
 
 _ENRICH_CONCURRENCY  = 5   # parallel detail-page fetches per browser session
 _ENRICH_TIMEOUT      = 600  # hard cap on the whole enrichment batch (10 min)
-_CARSCOM_PAGE_SIZE   = 24  # Cars.com shows 24 listings per page
-_CARSCOM_MAX_PAGES   = 25  # cap at 600 listings per run (all 9 models combined)
 
 
 _INSIGHTS_KEYWORDS = re.compile(
