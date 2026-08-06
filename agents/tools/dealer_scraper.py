@@ -323,17 +323,21 @@ async def _scrape_cobalt_dom_async(inventory_url: str, brand: str,
                 if not cards_data:
                     break
 
+                skipped = 0
                 for card in cards_data:
                     vin = card.get("vin")
                     if vin and vin in seen_vins:
+                        skipped += 1
                         continue
 
                     title = card.get("titleLine", "").strip()
                     if not title:
+                        skipped += 1
                         continue
 
                     year_s, make, model, trim = _parse_title(title)
                     if not year_s or not make or not model:
+                        skipped += 1
                         continue
 
                     mileage = int(card["mileage"]) if card.get("mileage") else None
@@ -342,6 +346,7 @@ async def _scrape_cobalt_dom_async(inventory_url: str, brand: str,
                     is_cpo = is_cpo_page or card.get("isCpo", False)
 
                     if not price:
+                        skipped += 1
                         continue
 
                     ext_id = vin or re.sub(r'[^a-z0-9]', '', href.lower())[-20:]
@@ -357,6 +362,9 @@ async def _scrape_cobalt_dom_async(inventory_url: str, brand: str,
                     ))
                     if vin:
                         seen_vins.add(vin)
+
+                if skipped:
+                    print(f"    [cobalt_dom] page start={start}: {len(cards_data) - skipped} parsed, {skipped} skipped (no title/price/vin-dup)", flush=True)
 
                 if len(cards_data) < page_size:
                     break
@@ -1894,7 +1902,7 @@ def scrape_dealer(site: dict, makes: list[str] | None = None,
                 try:
                     cpo_listings = _run_with_timeout(
                         _scrape_cobalt_dom_async(cpo_url, site["brand"], makes, min_year, max_year),
-                        timeout=150,
+                        timeout=60,
                     )
                     if cpo_listings:
                         print(f"    CPO: {len(cpo_listings)} listings at /certified-inventory/", flush=True)

@@ -538,16 +538,19 @@ def run(run_id: str = "", force: bool = False) -> dict:
                     fp = (listing.get("year"), listing.get("mileage"), listing.get("price"))
                     dfp = (listing.get("dealer_name"), listing.get("make"), listing.get("model"), listing.get("year"), listing.get("mileage"))
                     ext_id = str(listing["external_id"])
-                    
-                    _save_new(listing)
-                    known_dealer[ext_id] = listing["price"]
-                    if vin: shared_known_vins.add(vin)
-                    if url: shared_known_urls.add(url)
-                    if all(v is not None for v in fp):
-                        known_dealer_price_fps.add(fp)
-                    if all(v is not None for v in dfp):
-                        known_dealer_dfps.add(dfp)
-                    dealer_new += 1
+                    try:
+                        _save_new(listing)
+                        known_dealer[ext_id] = listing["price"]
+                        if vin: shared_known_vins.add(vin)
+                        if url: shared_known_urls.add(url)
+                        if all(v is not None for v in fp):
+                            known_dealer_price_fps.add(fp)
+                        if all(v is not None for v in dfp):
+                            known_dealer_dfps.add(dfp)
+                        dealer_new += 1
+                    except Exception as e:
+                        print(f"  [dealer] save error ({ext_id}): {e}", flush=True)
+                        dealer_skipped += 1
             source_results[DEALER_SOURCE] = dealer_total
             print(f"  [dealer] {dealer_new} new, {dealer_skipped} filtered from {dealer_total} raw", flush=True)
         except Exception as e:
