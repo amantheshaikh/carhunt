@@ -354,10 +354,6 @@ def _make_gb_pipeline() -> Pipeline:
         )),
     ])
 
-# Keep old name so any external callers still work.
-_make_pipeline = _make_gb_pipeline
-
-
 _KNN_FEATURE_COLS = slice(0, 4)  # [year, log_mileage, trim_premium, drivetrain]
 
 
@@ -470,11 +466,9 @@ def load_training_data_for(model_name: str, powertrain_filter: str | None = None
     rows = list(train_rows) + list(listing_rows)
     # For split models, filter listings by detected powertrain
     if powertrain_filter:
-        pt_slug = "phev" if powertrain_filter in ("phev", "electric", "hybrid") else "gas"
         rows = [
             r for r in rows
-            if (r.get("powertrain") or detect_powertrain(r.get("trim"), r.get("model"))) == pt_slug
-            or (r.get("powertrain") or detect_powertrain(r.get("trim"), r.get("model"))) == powertrain_filter
+            if (r.get("powertrain") or detect_powertrain(r.get("trim"), r.get("model"))) == powertrain_filter
         ]
 
     X, y = [], []
