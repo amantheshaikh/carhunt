@@ -13,6 +13,7 @@ import json
 from tools.db import fetch_all, execute, execute_values
 from tools.price_model import predict_fair_price, explain_listing, resolve_drivetrain
 from tools.scoring import score_listing
+from tools.kbb_service import predict_kbb_fair_price, update_kbb_market_cache
 
 
 def run() -> dict:
@@ -37,34 +38,54 @@ def run() -> dict:
             listing["drivetrain"] = resolved  # use resolved value for scoring features too
 
         gb_price, residual_std = predict_fair_price(listing)
-        score = score_listing(listing["price"], gb_price, residual_std or 0.0)
+        kbb_price = predict_kbb_fair_price(listing)
 
-        if score is None:
-            # No ML model yet — activate so it shows as Unscored
+        if gb_price is None and kbb_price is None:
+            # No valuation available yet — activate so it shows as Unscored
             to_activate.append(lid)
             continue
 
-        explanation = explain_listing(listing)
-        score_rows.append((lid, score, gb_price, json.dumps(explanation) if explanation else None))
+        if gb_price is not None and kbb_price is not None:
+            blended_fair_price = int(round(0.70 * gb_price + 0.30 * kbb_price))
+            market_source = 'stacked_ml_kbb_blend'
+        elif gb_price is not None:
+            blended_fair_price = gb_price
+            market_source = 'ml_model'
+        else:
+            blended_fair_price = kbb_price
+            market_source = 'kbb'
+
+        score = score_listing(listing["price"], blended_fair_price, residual_std or 0.0)
+
+        if score is None:
+            to_activate.append(lid)
+            continue
+
+        explanation = explain_listing(listing, kbb_price=kbb_price)
+        score_rows.append((lid, score, blended_fair_price, kbb_price, market_source, json.dumps(explanation) if explanation else None))
         to_activate.append(lid)
 
-    # Leave existing scores in place for listings we can't score this run (e.g. null mileage).
-    # Deleting them makes listings invisible in the dashboard — stale score is better than none.
-
-    # Batch upsert scores
+    # Batch upsert scores with kbb_price and blended fair_price
     execute_values(
         """INSERT INTO listing_scores
-               (listing_id, value_score, fair_price, market_price_source, shap_values, scored_at)
+               (listing_id, value_score, fair_price, kbb_price, market_price_source, shap_values, scored_at)
            VALUES %s
            ON CONFLICT (listing_id) DO UPDATE SET
                value_score = EXCLUDED.value_score,
                fair_price = EXCLUDED.fair_price,
+               kbb_price = EXCLUDED.kbb_price,
                market_price_source = EXCLUDED.market_price_source,
                shap_values = EXCLUDED.shap_values,
                scored_at = now()""",
-        [(lid, score, mp, shap) for lid, score, mp, shap in score_rows],
-        template="(%s::uuid, %s, %s, 'ml_model', %s, now())",
+        score_rows,
+        template="(%s::uuid, %s, %s, %s, %s, %s, now())",
     )
+
+    # Update KBB market medians cache
+    try:
+        update_kbb_market_cache()
+    except Exception as e:
+        print(f"  [kbb_service] warning updating market cache: {e}")
 
     # Backfill resolved drivetrains for listings that had none
     if drivetrain_updates:

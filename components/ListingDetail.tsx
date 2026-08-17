@@ -380,7 +380,7 @@ export default function ListingDetail({ listing: l, onClose, onAction }: Props) 
               <div className="flex items-center gap-2">
                 <p className="text-sm font-medium text-zinc-300">Deal Rating</p>
                 <span className="text-xs text-zinc-500 bg-zinc-800/60 px-1.5 py-0.5 rounded font-mono">
-                  {l.shap_values?.gb_pred !== undefined && l.shap_values?.knn_pred ? "Stacked Blend" : "Gradient Boosting"}
+                  {l.kbb_price || l.shap_values?.kbb_pred ? "Stacked ML + KBB Blend" : l.shap_values?.knn_pred ? "Stacked Blend" : "Gradient Boosting"}
                 </span>
                 {getDealCategory(l.value_score) && (
                   <span className={`px-2 py-0.5 text-xs font-semibold rounded-md ${getDealCategoryStyle(l.value_score)}`}>
@@ -403,45 +403,68 @@ export default function ListingDetail({ listing: l, onClose, onAction }: Props) 
             {l.fair_price && (() => {
               const diff = l.fair_price - l.price;
               const pct  = ((Math.abs(diff) / l.fair_price) * 100).toFixed(1);
+              const kbbVal = l.kbb_price ?? l.shap_values?.kbb_pred;
+              const mlVal = l.shap_values?.ml_pred ?? l.shap_values?.predicted;
               return (
-                <p className={`text-xs font-medium ${diff > 0 ? "text-green-400" : "text-red-400"}`}>
-                  {diff > 0
-                    ? `$${diff.toLocaleString()} (${pct}%) below fair value of $${l.fair_price.toLocaleString()}`
-                    : `$${Math.abs(diff).toLocaleString()} (${pct}%) above fair value of $${l.fair_price.toLocaleString()}`}
-                </p>
+                <div className="space-y-0.5">
+                  <p className={`text-xs font-medium ${diff > 0 ? "text-green-400" : "text-red-400"}`}>
+                    {diff > 0
+                      ? `$${diff.toLocaleString()} (${pct}%) below fair value of $${l.fair_price.toLocaleString()}`
+                      : `$${Math.abs(diff).toLocaleString()} (${pct}%) above fair value of $${l.fair_price.toLocaleString()}`}
+                  </p>
+                  {(kbbVal || mlVal) && (
+                    <p className="text-[11px] text-zinc-400 font-mono">
+                      {mlVal ? `ML Model: $${mlVal.toLocaleString()}` : ""}
+                      {mlVal && kbbVal ? " · " : ""}
+                      {kbbVal ? `KBB Fair Value: $${kbbVal.toLocaleString()}` : ""}
+                    </p>
+                  )}
+                </div>
               );
             })()}
           </div>
 
-          {/* Ensemble Estimator Influence */}
+          {/* Ensemble Estimator & Market Benchmarks */}
           {l.shap_values && l.shap_values.gb_pred !== undefined && (
             <div className="space-y-2 pt-2 border-t border-zinc-800">
-              <p className="text-xs font-medium text-zinc-400">Ensemble Estimator Influence</p>
-              <div className="grid grid-cols-3 gap-2">
+              <p className="text-xs font-medium text-zinc-400">Ensemble Estimator & Market Benchmarks</p>
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
                 {[
                   {
                     name: "Gradient Boosting (GB)",
+                    shortName: "GB Model",
                     pred: l.shap_values.gb_pred,
-                    weight: l.shap_values.meta_weights?.[0] ?? 1.0,
+                    weight: (l.shap_values.meta_weights?.[0] ?? 1.0) * (l.shap_values.ml_weight ?? 1.0),
                     color: "bg-purple-500",
                     textColor: "text-purple-300",
                     bgColor: "bg-purple-950/20 border-purple-900/30",
                   },
                   {
                     name: "K-Nearest Neighbors (KNN)",
+                    shortName: "KNN Model",
                     pred: l.shap_values.knn_pred,
-                    weight: l.shap_values.meta_weights?.[1] ?? 0.0,
+                    weight: (l.shap_values.meta_weights?.[1] ?? 0.0) * (l.shap_values.ml_weight ?? 1.0),
                     color: "bg-amber-500",
                     textColor: "text-amber-300",
                     bgColor: "bg-amber-950/20 border-amber-900/30",
                   },
                   {
                     name: "Ridge Regression",
+                    shortName: "Ridge Model",
                     pred: l.shap_values.ridge_pred,
-                    weight: l.shap_values.meta_weights?.[2] ?? 0.0,
+                    weight: (l.shap_values.meta_weights?.[2] ?? 0.0) * (l.shap_values.ml_weight ?? 1.0),
                     color: "bg-cyan-500",
                     textColor: "text-cyan-300",
                     bgColor: "bg-cyan-950/20 border-cyan-900/30",
+                  },
+                  {
+                    name: "Kelley Blue Book (KBB)",
+                    shortName: "KBB Value",
+                    pred: l.kbb_price ?? l.shap_values.kbb_pred,
+                    weight: l.shap_values.kbb_weight ?? (l.kbb_price ? 0.3 : 0.0),
+                    color: "bg-emerald-500",
+                    textColor: "text-emerald-300",
+                    bgColor: "bg-emerald-950/20 border-emerald-900/30",
                   }
                 ].map((model, idx) => {
                   if (model.pred == null) return null;
@@ -453,7 +476,7 @@ export default function ListingDetail({ listing: l, onClose, onAction }: Props) 
                       <div>
                         <div className="flex items-center justify-between">
                           <span className="text-[10px] font-semibold text-zinc-400 tracking-wider uppercase truncate max-w-[70%]">
-                            {model.name.split(" ")[0]}
+                            {model.shortName}
                           </span>
                           <span className={`text-[10px] font-bold ${model.textColor}`}>
                             {weightPct}%

@@ -41,8 +41,9 @@ CREATE TABLE IF NOT EXISTS listing_scores (
   age_score NUMERIC,
   reliability_score NUMERIC,
   paperwork_score NUMERIC,
-  fair_price          INT,                   -- ML-predicted fair price
-  market_price_source TEXT,                  -- 'ml_model'
+  fair_price          INT,                   -- ML + KBB blended fair price
+  kbb_price           INT,                   -- KBB Fair Purchase Price estimate
+  market_price_source TEXT,                  -- 'ml_model' | 'stacked_ml_kbb_blend'
   monthly_payment NUMERIC,
   shap_values JSONB,
   scored_at TIMESTAMPTZ NOT NULL DEFAULT now()
@@ -127,6 +128,7 @@ ON CONFLICT DO NOTHING;
 ALTER TABLE listings ADD COLUMN IF NOT EXISTS condition TEXT NOT NULL DEFAULT 'used';
 ALTER TABLE listing_scores ADD COLUMN IF NOT EXISTS market_price_source TEXT;
 ALTER TABLE listing_scores ADD COLUMN IF NOT EXISTS shap_values JSONB;
+ALTER TABLE listing_scores ADD COLUMN IF NOT EXISTS kbb_price INT;
 CREATE INDEX IF NOT EXISTS idx_listings_condition ON listings(condition);
 ALTER TABLE price_training_data ADD COLUMN IF NOT EXISTS cpo BOOLEAN DEFAULT false;
 ALTER TABLE listings ADD COLUMN IF NOT EXISTS user_notes TEXT;

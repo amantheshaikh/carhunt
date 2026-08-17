@@ -17,7 +17,7 @@ export async function GET(req: NextRequest) {
   const placeholders = statuses.map((_, i) => `$${i + 1}`).join(", ");
 
   const rows = await query<Listing>(
-    `SELECT l.*, ls.value_score, ls.fair_price, ls.market_price_source, ls.shap_values
+    `SELECT l.*, ls.value_score, ls.fair_price, ls.kbb_price, ls.market_price_source, ls.shap_values
      FROM listings l
      LEFT JOIN listing_scores ls ON ls.listing_id = l.id
      WHERE l.status IN (${placeholders})

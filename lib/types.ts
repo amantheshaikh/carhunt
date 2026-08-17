@@ -36,9 +36,10 @@ export interface Listing {
     price_drop: number | null;
     owner_notes: string | null;
   } | null;
-  // joined from listing_scores (Stacked Ensemble model)
+  // joined from listing_scores (Stacked Ensemble + KBB Blend model)
   value_score: number | null;
   fair_price: number | null;
+  kbb_price?: number | null;
   market_price_source: string | null;
   shap_values: {
     base_value: number;
@@ -49,6 +50,11 @@ export interface Listing {
     ridge_pred?: number | null;
     meta_weights?: number[];
     residual_std?: number | null;
+    kbb_pred?: number | null;
+    ml_pred?: number | null;
+    blended_pred?: number | null;
+    ml_weight?: number | null;
+    kbb_weight?: number | null;
   } | null;
 }
 

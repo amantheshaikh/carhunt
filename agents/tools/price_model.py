@@ -610,30 +610,28 @@ _POWERTRAIN_LABEL = {1.0: "Electric/PHEV", 0.8: "Hybrid", 0.0: "Gas"}
 _CPO_LABEL = {1.0: "Certified Pre-Owned (CPO)", 0.0: "Non-CPO"}
 
 
-def explain_listing(listing: dict) -> dict | None:
-    """Return SHAP-based price breakdown for a listing.
+def explain_listing(listing: dict, kbb_price: int | None = None) -> dict | None:
+    """Return SHAP-based price breakdown for a listing, including KBB Fair Price.
 
     Returns:
         {
           "base_value": 32000,          # average price for this model in training data
-          "predicted": 34500,           # ML fair price (= base + sum of contributions)
-          "features": [
-            {"label": "Year 2025",      "delta": 800,  "raw": 2025},
-            {"label": "8,000 miles",    "delta": 600,  "raw": 8000},
-            {"label": "Trim XLE",       "delta": -200, "raw": 2},
-            {"label": "AWD",            "delta": 900,  "raw": 1.0},
-            {"label": "Hybrid",         "delta": 400,  "raw": 0.8},
-            {"label": "CPO",            "delta": 500,  "raw": 1.0},
-          ]
+          "predicted": 34500,           # Blended fair price (70% ML + 30% KBB)
+          "ml_pred": 34200,             # ML Stacked Model fair price
+          "kbb_pred": 35200,            # KBB Fair Purchase Price
+          "blended_pred": 34500,        # Blended fair price
+          "ml_weight": 0.7,
+          "kbb_weight": 0.3,
+          "features": [ ... ]
         }
-    Only includes features with |delta| >= $50 to avoid noise.
-    Returns None if no model is available or shap is not installed.
     """
     try:
         import shap as _shap
         import numpy as _np
     except ImportError:
         return None
+
+    from tools.kbb_service import predict_kbb_fair_price
 
     model_name = (listing.get("model") or "").lower().strip()
     raw_features = _to_features(listing)
@@ -656,18 +654,15 @@ def explain_listing(listing: dict) -> dict | None:
         gb_pred_val = int(round(base_value + shap_vals.sum()))
         predicted  = int(round(pipe.predict(X_raw)[0])) if isinstance(pipe, StackedModel) else gb_pred_val
 
-        # Reconcile GB SHAP values (which sum to gb_pred - base_value) with the
-        # stacked prediction.
-        #
-        # Healthy (0 < scale ≤ 3): scale shap_vals so they sum to
-        #   (predicted - base_value). Signs preserved, magnitudes scaled slightly.
-        #
-        # Unhealthy (scale < 0 or scale > 3): scaling would flip signs or
-        #   wildly amplify (e.g. GB=+27 vs stacked=-73 → scale=-2.73).
-        #   Keep raw GB shap_vals (correct signs/magnitudes) and record the
-        #   GB↔stacked gap as a separate ensemble_adjustment value surfaced in
-        #   the feature list. base_value stays at the canonical GB expected_value
-        #   so it remains comparable across all listings of the same model.
+        # KBB Fair Price computation
+        kbb_val = kbb_price if kbb_price is not None else predict_kbb_fair_price(listing)
+        if kbb_val:
+            blended_pred = int(round(0.70 * predicted + 0.30 * kbb_val))
+            ml_w, kbb_w = 0.70, 0.30
+        else:
+            blended_pred = predicted
+            ml_w, kbb_w = 1.0, 0.0
+
         gb_delta          = gb_pred_val - base_value
         target_delta      = predicted   - base_value
         ensemble_adj      = 0
@@ -676,9 +671,6 @@ def explain_listing(listing: dict) -> dict | None:
             if 0.3 <= scale_factor <= 3:
                 shap_vals = shap_vals * scale_factor
             else:
-                # scale < 0 (sign flip), scale > 3 (wild amplification), or
-                # scale < 0.3 (severe compression — KNN/Ridge cancel most of GB's
-                # signal, collapsing individual SHAPs to noise): use raw GB SHAPs.
                 ensemble_adj = int(round(predicted - gb_pred_val))
         else:
             if abs(target_delta) > 1e-2:
@@ -687,7 +679,6 @@ def explain_listing(listing: dict) -> dict | None:
                 shap_vals = _np.zeros_like(shap_vals)
 
         year           = int(raw_features[0])
-        # raw_features[1] is log1p(miles) — show actual miles in label
         if listing.get("mileage") is None:
             vehicle_year = int(listing.get("year") or _CURRENT_YEAR)
             age_years = max(1, _CURRENT_YEAR - vehicle_year + 1)
@@ -699,13 +690,12 @@ def explain_listing(listing: dict) -> dict | None:
         powertrain = raw_features[4]
         cpo        = raw_features[5]
 
-        # Use the original ordinal trim level for fallback naming if trim is None
         trim_ord = _trim_level(model_name, listing.get("trim"))
         trim_name = listing.get("trim") or f"Level {trim_ord:.0f}"
 
         raw_labels = [
             (f"Year {year}",                  float(year)),
-            (f"{mileage_actual:,} miles",     float(mileage_actual)),   # show actual miles, not log value
+            (f"{mileage_actual:,} miles",     float(mileage_actual)),
             (f"Trim — {trim_name[:25]}",      trim_lvl),
             (_DRIVETRAIN_LABEL.get(drivetrain, "Drivetrain"), drivetrain),
             (_POWERTRAIN_LABEL.get(powertrain, "Powertrain"), powertrain),
@@ -715,12 +705,12 @@ def explain_listing(listing: dict) -> dict | None:
         features = [
             {"label": label, "delta": int(round(float(sv))), "raw": float(raw)}
             for (label, raw), sv in zip(raw_labels, shap_vals)
-            if abs(sv) >= 50  # skip noise
+            if abs(sv) >= 50
         ]
         if abs(ensemble_adj) >= 50:
             features.append({"label": "Ensemble Adjustment", "delta": ensemble_adj, "raw": float(ensemble_adj)})
 
-        gb_pred = gb_pred_val  # equals base_value + shap_vals.sum()
+        gb_pred = gb_pred_val
         if isinstance(pipe, StackedModel):
             knn_pred = int(round(pipe.knn.predict(X_raw[:, _KNN_FEATURE_COLS])[0]))
             ridge_pred = int(round(pipe.ridge.predict(X_raw)[0]))
@@ -734,7 +724,12 @@ def explain_listing(listing: dict) -> dict | None:
 
         return {
             "base_value": int(round(base_value)),
-            "predicted":  predicted,
+            "predicted":  blended_pred,
+            "ml_pred":    predicted,
+            "kbb_pred":   kbb_val,
+            "blended_pred": blended_pred,
+            "ml_weight":  ml_w,
+            "kbb_weight": kbb_w,
             "features":   features,
             "gb_pred":    gb_pred,
             "knn_pred":   knn_pred,

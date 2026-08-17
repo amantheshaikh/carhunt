@@ -8,7 +8,7 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ id: 
   const { id } = await params;
 
   const listing = await queryOne<Listing>(
-    `SELECT l.*, ls.value_score, ls.fair_price, ls.market_price_source, ls.shap_values
+    `SELECT l.*, ls.value_score, ls.fair_price, ls.kbb_price, ls.market_price_source, ls.shap_values
      FROM listings l
      LEFT JOIN listing_scores ls ON ls.listing_id = l.id
      WHERE l.id = $1`,
