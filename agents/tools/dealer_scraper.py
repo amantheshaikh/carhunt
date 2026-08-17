@@ -258,13 +258,23 @@ async def _scrape_cobalt_async(inventory_url: str, brand: str,
 
 async def _scrape_cobalt_dom_async(inventory_url: str, brand: str,
                                     makes: list[str] | None = None,
-                                    min_year: int = 0, max_year: int | None = None) -> list[dict]:
+                                    min_year: int = 0, max_year: int | None = None,
+                                    progressive_scroll: bool = False) -> list[dict]:
     inventory: list[dict] = []
     seen_vins: set[str] = set()
     is_cpo_page = "certified" in inventory_url.lower()
 
     # Add make/year server-side filters (DDC SSR supports standard query params)
     filtered_url = _build_dealer_com_url(inventory_url, makes, min_year, max_year)
+
+    async def _scroll_progressive(pg) -> None:
+        """Incrementally scroll through the page to trigger IntersectionObserver lazy loading."""
+        height = await pg.evaluate("() => document.body.scrollHeight")
+        step = 600
+        for y in range(0, height + step, step):
+            await pg.evaluate(f"() => window.scrollTo(0, {y})")
+            await pg.wait_for_timeout(150)
+        await pg.wait_for_timeout(1000)
 
     async with Stealth().use_async(async_playwright()) as p:
         browser, ctx = await _stealth_browser(p)
@@ -282,6 +292,8 @@ async def _scrape_cobalt_dom_async(inventory_url: str, brand: str,
 
                 await page.goto(page_url, wait_until="domcontentloaded", timeout=30_000)
                 await page.wait_for_timeout(2_500)
+                if progressive_scroll:
+                    await _scroll_progressive(page)
 
                 cards_data = await page.evaluate("""() => {
                     const cards = [...document.querySelectorAll('li.vehicle-card')];
@@ -1997,7 +2009,8 @@ def scrape_dealer(site: dict, makes: list[str] | None = None,
                 ))
             elif cfg.get("type") == "cobalt_dom":
                 _add_used(_run_with_timeout(
-                    _scrape_cobalt_dom_async(site["inventory_url"], site["brand"], makes, min_year, max_year),
+                    _scrape_cobalt_dom_async(site["inventory_url"], site["brand"], makes, min_year, max_year,
+                                             progressive_scroll=cfg.get("progressive_scroll", False)),
                     timeout=150,
                 ))
                 # Probe certified inventory on DDC sites (separate URL path)
