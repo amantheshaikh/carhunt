@@ -985,6 +985,117 @@ async def _scrape_secureoffersites_async(inventory_url: str, brand: str) -> list
 
 
 # ---------------------------------------------------------------------------
+# Audi One / Arcade platform (Audi dealer sites using the "One" CDN)
+# ---------------------------------------------------------------------------
+
+async def _scrape_audi_one_async(inventory_url: str, brand: str,
+                                  makes: list[str] | None = None,
+                                  min_year: int = 0, max_year: int | None = None) -> list[dict]:
+    """Scrape Audi dealer sites running the Audi One/Arcade platform.
+
+    Inventory loads client-side; cards appear as [class*="VehicleCard"] elements
+    with [data-testid="model-name"]. Pagination via "Load more vehicles" button.
+    URL pattern: https://www.audiatlanta.com/en/inventory/used/
+    """
+    inventory: list[dict] = []
+    seen_vins: set[str] = set()
+    base_url = "/".join(inventory_url.split("/")[:3])
+
+    def _parse_card(card: dict) -> dict | None:
+        vin = card.get("vin")
+        if not vin:
+            return None
+        # model_text = "2024 Audi Q5" → year=2024, make="Audi", model="Q5"
+        model_text = (card.get("model") or "").strip()
+        m = re.match(r"^(\d{4})\s+(\w+)\s+(.+)$", model_text)
+        if not m:
+            return None
+        year_str, make, model = m.group(1), m.group(2), m.group(3)
+        # Trim cleanup — remove ® symbols and extra qualifiers
+        raw_trim = (card.get("trim") or "").replace("®", "").replace("™", "").strip()
+        trim = raw_trim or None
+
+        mileage_str = (card.get("mileage") or "").replace(",", "")
+        mileage = int(mileage_str) if mileage_str.isdigit() else None
+
+        price_str = (card.get("price") or "").replace(",", "").replace(".", "")
+        # Price comes as e.g. "6499500" from "64,995.00" with decimal stripped; use _int
+        price = _int(card.get("price")) if card.get("price") else None
+
+        if not price:
+            return None
+
+        detail_url = f"{base_url}/en/inventory/vehicle/?isdealer&market=us&vehicleId={vin}"
+        stock = (card.get("stock") or "").replace("Stock #:", "").strip()
+
+        return _make_listing(
+            brand, vin,
+            vin=vin, make=make, model=model, trim=trim,
+            year=int(year_str), body_type=None,
+            mileage=mileage, price=price,
+            listing_url=detail_url,
+            photos_url=[],
+            dealer_name=brand,
+            raw={"vin": vin, "year": year_str, "make": make, "model": model,
+                 "trim": trim, "price": price, "mileage": mileage, "stock": stock},
+        )
+
+    async with Stealth().use_async(async_playwright()) as p:
+        browser, ctx = await _stealth_browser(p)
+        page = await ctx.new_page()
+        try:
+            await page.goto(inventory_url, wait_until="domcontentloaded", timeout=30_000)
+            await page.wait_for_timeout(8_000)
+
+            for _ in range(30):  # up to 30 "Load more" clicks
+                cards_data = await page.evaluate(r"""() => {
+                    const cards = [...document.querySelectorAll('[class*="VehicleCard"]')].filter(el =>
+                        el.querySelector('[data-testid="model-name"]')
+                    );
+                    return cards.map(card => {
+                        const vin = (card.querySelector('a[href*="vehicleId"]')?.href || '')
+                            .match(/vehicleId=([A-Z0-9]+)/)?.[1] || null;
+                        const model = card.querySelector('[data-testid="model-name"]')?.innerText?.trim() || '';
+                        const trim  = card.querySelector('[data-testid="trim-name"]')?.innerText?.trim() || '';
+                        const stock = card.querySelector('[data-testid="stock-number"]')?.innerText?.trim() || '';
+                        const text  = card.innerText || '';
+                        const mileM = text.match(/([0-9,]+)\s*mi(?:les)?/i);
+                        const priceM = text.match(/\$([0-9,]+(?:\.[0-9]+)?)\b/);
+                        return {
+                            vin, model, trim, stock,
+                            mileage: mileM ? mileM[1] : null,
+                            price: priceM ? priceM[1] : null,
+                        };
+                    });
+                }""")
+
+                for c in cards_data:
+                    if not c.get("vin") or c["vin"] in seen_vins:
+                        continue
+                    seen_vins.add(c["vin"])
+                    listing = _parse_card(c)
+                    if listing:
+                        inventory.append(listing)
+
+                # Click "Load more vehicles" to paginate
+                clicked = await page.evaluate("""() => {
+                    const btn = [...document.querySelectorAll('button')].find(
+                        b => b.innerText?.trim().toLowerCase() === 'load more vehicles'
+                    );
+                    if (btn) { btn.click(); return true; }
+                    return false;
+                }""")
+                if not clicked:
+                    break
+                await page.wait_for_timeout(3_000)
+
+        finally:
+            await browser.close()
+
+    return inventory
+
+
+# ---------------------------------------------------------------------------
 # Playwright-based scraper (all other dealer sites)
 # ---------------------------------------------------------------------------
 
@@ -1930,6 +2041,12 @@ def scrape_dealer(site: dict, makes: list[str] | None = None,
                     _scrape_dealeron_cosmos_async(site["inventory_url"], site["brand"],
                                                    makes=makes, min_year=min_year, max_year=max_year,
                                                    cosmos_path=cfg.get("cosmos_path"))
+                ))
+            elif cfg.get("type") == "audi_one":
+                _add_used(_run_with_timeout(
+                    _scrape_audi_one_async(site["inventory_url"], site["brand"],
+                                           makes=makes, min_year=min_year, max_year=max_year),
+                    timeout=150,
                 ))
             else:
                 _add_used(_run_with_timeout(

@@ -330,7 +330,7 @@ PROXY_URL=...                   # optional: http://user:pass@host:port for resid
 
 ---
 
-## Active Dealer Sites (~60 total)
+## Active Dealer Sites (~65 total)
 
 **Volvo (5):** Dyer & Dyer, North Point, O'Steen Athens, Mall of Georgia, Marietta — all `cobalt` type
 
@@ -346,6 +346,8 @@ PROXY_URL=...                   # optional: http://user:pass@host:port for resid
 
 **Lexus (5):** Butler South, Hennessy Atlanta, Hennessy Gwinnett, Nalley Roswell, Nalley Smyrna
 
+**Audi (4):** Atlanta, Gwinnett, South Atlanta, North Atlanta — all `audi_one` type. Inventory URL: `/en/inventory/used/`
+
 **Multi-brand / other (~14):** ALM (6 locations), Amazing Luxury Cars, Nalley Kia, Heyward Allen Toyota, Cadillac dealers (cross-brand discovery)
 
 **Adding a Cobalt dealer:** set `scraper_config = {"type": "cobalt"}`.
@@ -353,6 +355,8 @@ PROXY_URL=...                   # optional: http://user:pass@host:port for resid
 **Adding a DealerInspire Algolia dealer:** `scraper_config = {"type": "dealerinspire_algolia", "app_id": "SEWJN80HTN", "api_key": "...", "index": "{slug}_production_inventory"}`.
 
 **CarsCommerce dealers:** BMW of Gwinnett uses `type_slugs = ["Pre-Owned", "Certified Pre-Owned"]` in scraper_config.
+
+**Adding an Audi One dealer:** set `scraper_config = {"type": "audi_one"}` and `inventory_url = "https://www.audi{dealer}.com/en/inventory/used/"`. The scraper handles "Load more vehicles" pagination and extracts VIN, year/make/model from `[data-testid="model-name"]`, trim from `[data-testid="trim-name"]`, and mileage/price from card text.
 
 ---
 
