@@ -2031,7 +2031,18 @@ def scrape_dealer(site: dict, makes: list[str] | None = None,
 
     cfg = site.get("scraper_config") or {}
 
-    if site.get("inventory_url"):
+    # ridemotive uses dealer_id from scraper_config and has no inventory_url
+    if cfg.get("type") == "ridemotive":
+        try:
+            _add_used(_scrape_ridemotive_api(
+                cfg["dealer_id"], site["brand"],
+                site.get("website_url") or site.get("inventory_url"),
+                makes, min_year, max_year,
+            ))
+        except Exception as e:
+            print(f"    used inventory error: {e}", flush=True)
+
+    elif site.get("inventory_url"):
         try:
             if _is_overfuel_url(site["inventory_url"]):
                 _add_used(_scrape_overfuel(
@@ -2075,12 +2086,6 @@ def scrape_dealer(site: dict, makes: list[str] | None = None,
                     type_slugs=cfg.get("type_slugs"),
                     allowed_states=cfg.get("allowed_states"),
                     makes=makes, min_year=min_year, max_year=max_year,
-                ))
-            elif cfg.get("type") == "ridemotive":
-                _add_used(_scrape_ridemotive_api(
-                    cfg["dealer_id"], site["brand"],
-                    site.get("website_url", site["inventory_url"]),
-                    makes, min_year, max_year,
                 ))
             elif cfg.get("type") == "secureoffersites":
                 _add_used(_run_with_timeout(

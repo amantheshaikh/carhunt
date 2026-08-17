@@ -344,11 +344,11 @@ PROXY_URL=...                   # optional: http://user:pass@host:port for resid
 
 **BMW (6):** Athens, Gwinnett, South Atlanta, Global Imports, Nalley Decatur, United Alpharetta
 
-**Lexus (5):** Butler South, Hennessy Atlanta, Hennessy Gwinnett, Nalley Roswell, Nalley Smyrna
+**Lexus (3):** Butler South, Nalley Roswell, Nalley Smyrna — Hennessy Lexus consolidated into Hennessy Auto Group parent
 
 **Audi (4):** Atlanta, Gwinnett, South Atlanta, North Atlanta — all `audi_one` type. Inventory URL: `/en/inventory/used/`
 
-**Multi-brand / other (~14):** ALM (6 locations), Amazing Luxury Cars, Nalley Kia, Heyward Allen Toyota, Cadillac dealers (cross-brand discovery)
+**Multi-brand / other (~15):** ALM (6 locations), Amazing Luxury Cars, Nalley Kia, Heyward Allen Toyota, Cadillac dealers (cross-brand discovery), Hennessy Auto Group (Lexus + Cadillac, `cobalt_dom` + `progressive_scroll`)
 
 **Adding a Cobalt dealer:** set `scraper_config = {"type": "cobalt"}`.
 
