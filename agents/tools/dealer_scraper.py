@@ -658,28 +658,50 @@ def _scrape_dealerinspire_algolia(app_id: str, api_key: str, index: str, brand: 
     algolia_filters = "NOT type:New"
     if makes:
         algolia_filters += " AND (" + " OR ".join(f'make:"{m}"' for m in makes) + ")"
-    # Year range is intentionally NOT filtered at Algolia level — some indexes store year as a
-    # string attribute, so numeric range filters (year >= 2025) return 0 results. Year filtering
-    # is handled by _add_used post-scrape instead.
+    year_filter = ""
+    if min_year:
+        year_filter += f" AND year >= {min_year}"
+    if max_year:
+        year_filter += f" AND year <= {max_year}"
+    # Try with year filter first; some indexes store year as a string so numeric range
+    # returns 0 — detect that and retry without year filter on the first page.
+    year_filter_active = bool(year_filter)
+    active_filters = algolia_filters + year_filter
+
+    def _algolia_query(filters: str, pg: int) -> dict:
+        r = requests.post(
+            f"https://{app_id}-dsn.algolia.net/1/indexes/{index}/query",
+            headers={
+                "X-Algolia-Application-Id": app_id,
+                "X-Algolia-API-Key": api_key,
+                "Content-Type": "application/json",
+            },
+            json={"query": "", "hitsPerPage": 200, "page": pg, "filters": filters},
+            timeout=15,
+        )
+        return r.json()
 
     while True:
         try:
-            r = requests.post(
-                f"https://{app_id}-dsn.algolia.net/1/indexes/{index}/query",
-                headers={
-                    "X-Algolia-Application-Id": app_id,
-                    "X-Algolia-API-Key": api_key,
-                    "Content-Type": "application/json",
-                },
-                json={"query": "", "hitsPerPage": 200, "page": page, "filters": algolia_filters},
-                timeout=15,
-            )
-            data = r.json()
+            data = _algolia_query(active_filters, page)
         except Exception as e:
             print(f"    [dealerinspire_algolia] page {page} error: {e}", flush=True)
             break
 
         hits = data.get("hits", [])
+        # On the first page with year filter: if 0 hits but we'd expect results, the
+        # index likely stores year as a string — fall back to no year filter.
+        if not hits and page == 0 and year_filter_active:
+            try:
+                fallback = _algolia_query(algolia_filters, 0)
+                if fallback.get("hits"):
+                    print(f"    [dealerinspire_algolia] year filter unsupported on {index}, using post-filter", flush=True)
+                    active_filters = algolia_filters
+                    year_filter_active = False
+                    data = fallback
+                    hits = data.get("hits", [])
+            except Exception:
+                pass
         if not hits:
             break
 
@@ -731,7 +753,9 @@ def _scrape_dealerinspire_algolia(app_id: str, api_key: str, index: str, brand: 
 
 def _scrape_carscommerce_api(dealer_id: str, api_key: str, brand: str, website_url: str,
                              type_slugs: list[str] | None = None,
-                             allowed_states: list[str] | None = None) -> list[dict]:
+                             allowed_states: list[str] | None = None,
+                             makes: list[str] | None = None,
+                             min_year: int = 0, max_year: int | None = None) -> list[dict]:
     base = website_url.rstrip("/")
     headers = {
         "User-Agent": _UA,
@@ -740,10 +764,17 @@ def _scrape_carscommerce_api(dealer_id: str, api_key: str, brand: str, website_u
         "referer": f"{base}/",
         "origin": base,
     }
+    filters: dict = {"status": ["publish", "modified", "pend-sale"]}
+    if makes:
+        filters["make"] = makes
+    if min_year:
+        filters["year"] = {"min": min_year}
+        if max_year:
+            filters["year"]["max"] = max_year
     body = {
         "page": 1, "perPage": 100,
         "sort": [{"field": "low_price", "order": "asc"}],
-        "filters": {"status": ["publish", "modified", "pend-sale"]},
+        "filters": filters,
         "facetFilters": {"type_slug": type_slugs or ["Used", "Certified Used"]},
     }
     url = f"https://websites-search.api.carscommerce.inc/api/v1/listings/{dealer_id}/search"
@@ -1023,6 +1054,11 @@ async def _scrape_audi_one_async(inventory_url: str, brand: str,
         if not m:
             return None
         year_str, make, model = m.group(1), m.group(2), m.group(3)
+        year_int = int(year_str)
+        if min_year and year_int < min_year:
+            return None
+        if max_year and year_int > max_year:
+            return None
         # Trim cleanup — remove ® symbols and extra qualifiers
         raw_trim = (card.get("trim") or "").replace("®", "").replace("™", "").strip()
         trim = raw_trim or None
@@ -1043,7 +1079,7 @@ async def _scrape_audi_one_async(inventory_url: str, brand: str,
         return _make_listing(
             brand, vin,
             vin=vin, make=make, model=model, trim=trim,
-            year=int(year_str), body_type=None,
+            year=year_int, body_type=None,
             mileage=mileage, price=price,
             listing_url=detail_url,
             photos_url=[],
@@ -2038,6 +2074,7 @@ def scrape_dealer(site: dict, makes: list[str] | None = None,
                     site.get("website_url", site["inventory_url"]),
                     type_slugs=cfg.get("type_slugs"),
                     allowed_states=cfg.get("allowed_states"),
+                    makes=makes, min_year=min_year, max_year=max_year,
                 ))
             elif cfg.get("type") == "ridemotive":
                 _add_used(_scrape_ridemotive_api(

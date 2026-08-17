@@ -94,9 +94,11 @@ def _should_skip_source(source: str) -> tuple[bool, str]:
 
 
 def _get_known_ids(source: str) -> dict[str, int]:
-    """Return {external_id: price} for all non-expired listings from this source."""
+    """Return {external_id: price} for all listings from this source (including dismissed).
+    Dismissed listings are included so price drops are tracked via _touch_existing —
+    they stay dismissed (only 'expired' gets re-activated), but their price stays current."""
     rows = fetch_all(
-        "SELECT external_id, price FROM listings WHERE source = %s AND status NOT IN ('dismissed')",
+        "SELECT external_id, price FROM listings WHERE source = %s",
         (source,)
     )
     return {r["external_id"]: r["price"] for r in rows}
