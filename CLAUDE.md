@@ -330,7 +330,7 @@ PROXY_URL=...                   # optional: http://user:pass@host:port for resid
 
 ---
 
-## Active Dealer Sites (~65 total)
+## Active Dealer Sites (~60 total)
 
 **Volvo (5):** Dyer & Dyer, North Point, O'Steen Athens, Mall of Georgia, Marietta — all `cobalt` type
 
@@ -344,11 +344,15 @@ PROXY_URL=...                   # optional: http://user:pass@host:port for resid
 
 **BMW (6):** Athens, Gwinnett, South Atlanta, Global Imports, Nalley Decatur, United Alpharetta
 
-**Lexus (3):** Butler South, Nalley Roswell, Nalley Smyrna — Hennessy Lexus consolidated into Hennessy Auto Group parent
+**Lexus (4):** Butler South, Hennessy Gwinnett, Nalley Roswell, Nalley Smyrna — Hennessy Lexus Atlanta consolidated into Hennessy Auto Group parent
+
+**Genesis (2):** Genesis of Gwinnett, Rick Case Genesis Roswell — both `cobalt_dom` (dealer.com platform)
 
 **Audi (4):** Atlanta, Gwinnett, South Atlanta, North Atlanta — all `audi_one` type. Inventory URL: `/en/inventory/used/`
 
-**Multi-brand / other (~15):** ALM (6 locations), Amazing Luxury Cars, Nalley Kia, Heyward Allen Toyota, Cadillac dealers (cross-brand discovery), Hennessy Auto Group (Lexus + Cadillac, `cobalt_dom` + `progressive_scroll`)
+**Multi-brand / other (~13):** ALM Cars Group (group-wide Algolia index replacing 5 overfuel sites), ALM Mazda South (separate overfuel), Amazing Luxury Cars, Nalley Kia, Heyward Allen Toyota, Gravity Autos Atlanta, Cadillac dealers (cross-brand discovery), Hennessy Auto Group (Lexus + Cadillac + JLR, `cobalt_dom` + `progressive_scroll`)
+
+**ALM Cars Group:** Single `dealerinspire_algolia` entry with index `almkiasouth1_production_inventory` (app_id `YL5AFXM3DW`) covers ALM Gwinnett, Kennesaw, Mall of GA, Marietta, Roswell superstores. The 5 prior individual overfuel entries for these locations are now INACTIVE. ALM Hyundai West uses a separate Algolia app (app_id `1WNYBZLEEN`) and remains a separate active entry.
 
 **Adding a Cobalt dealer:** set `scraper_config = {"type": "cobalt"}`.
 
