@@ -215,23 +215,33 @@ function FilterBar({
           <div className="flex flex-wrap gap-4">
             <div>
               <p className="text-xs text-zinc-500 mb-1.5 font-medium">Max price</p>
-              <div className="flex gap-1.5">
-                {[["", "Any"], [25000, "$25k"], [28000, "$28k"], [30000, "$30k"], [33000, "$33k"]].map(([v, label]) => (
-                  <FilterChip key={String(v)} active={filters.maxPrice === v} onClick={() => onFilters({ ...filters, maxPrice: v as Filters["maxPrice"] })}>
-                    {label}
-                  </FilterChip>
-                ))}
+              <div className="relative">
+                <span className="absolute left-2.5 top-1/2 -translate-y-1/2 text-zinc-400 text-xs pointer-events-none">$</span>
+                <input
+                  type="number"
+                  min={0}
+                  step={500}
+                  placeholder="Any"
+                  value={filters.maxPrice === "" ? "" : filters.maxPrice}
+                  onChange={(e) => onFilters({ ...filters, maxPrice: e.target.value === "" ? "" : Number(e.target.value) })}
+                  className="pl-6 pr-3 py-1.5 text-xs bg-zinc-800 border border-zinc-700 text-zinc-200 rounded-lg w-32 focus:outline-none focus:border-blue-500 [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+                />
               </div>
             </div>
 
             <div>
               <p className="text-xs text-zinc-500 mb-1.5 font-medium">Max mileage</p>
-              <div className="flex gap-1.5">
-                {[["", "Any"], [5000, "5k"], [10000, "10k"], [20000, "20k"], [30000, "30k"]].map(([v, label]) => (
-                  <FilterChip key={String(v)} active={filters.maxMileage === v} onClick={() => onFilters({ ...filters, maxMileage: v as Filters["maxMileage"] })}>
-                    {label}
-                  </FilterChip>
-                ))}
+              <div className="relative">
+                <input
+                  type="number"
+                  min={0}
+                  step={1000}
+                  placeholder="Any"
+                  value={filters.maxMileage === "" ? "" : filters.maxMileage}
+                  onChange={(e) => onFilters({ ...filters, maxMileage: e.target.value === "" ? "" : Number(e.target.value) })}
+                  className="pl-3 pr-8 py-1.5 text-xs bg-zinc-800 border border-zinc-700 text-zinc-200 rounded-lg w-32 focus:outline-none focus:border-blue-500 [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+                />
+                <span className="absolute right-2.5 top-1/2 -translate-y-1/2 text-zinc-400 text-xs pointer-events-none">mi</span>
               </div>
             </div>
           </div>
