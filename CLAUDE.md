@@ -1,6 +1,6 @@
 # CarHunt
 
-A personal used-car deal tracker for the Atlanta metro area. Scrapes CarGurus, Cars.com, CarMax, Carvana, and local dealer websites for target vehicle configurations, scores each listing using a stacked ensemble ML model (GB + KNN + Ridge), and surfaces the best deals in a Next.js dashboard.
+A personal used-car deal tracker for the Atlanta metro area. Scrapes CarGurus, Cars.com, and local dealer websites for target vehicle configurations, scores each listing using a stacked ensemble ML model (GB + KNN + Ridge), and surfaces the best deals in a Next.js dashboard.
 
 ---
 
@@ -21,7 +21,7 @@ carhunt/
 │   ├── backfill_training.py  # Targeted fix/rescrape of price_training_data for one model
 │   ├── cars.json             # Single source of truth: target vehicles + trim rules
 │   └── tools/
-│       ├── scrapers.py       # Playwright scrapers: CarGurus, Cars.com, CarMax, Carvana
+│       ├── scrapers.py       # Playwright scrapers: CarGurus, Cars.com
 │       ├── dealer_scraper.py # Playwright inventory scraper for dealer websites
 │       ├── db.py             # psycopg2 helpers + refresh_self_computed_medians()
 │       ├── scoring.py        # score_listing() + detect_drivetrain/powertrain
@@ -94,7 +94,7 @@ carhunt/
 
 **3-pass ingestion:**
 - **Pass 1** — Filter candidates: `_is_valid()` + VIN dedup + URL dedup + fingerprint dedup
-- **Pass 2** — Detail page enrichment: fetches each new listing's page to extract accident count, title status, owner count, and LLM qualitative insights. **Runs for CarGurus, Cars.com, and local dealer sources** (which are enriched optionally to extract packages/CPO from VDP pages). CarMax and Carvana set these fields directly in their scrapers.
+- **Pass 2** — Detail page enrichment: fetches each new listing's page to extract accident count, title status, owner count, and LLM qualitative insights. **Runs for all sources** (CarGurus, Cars.com, and local dealer sources).
 - **Pass 3** — Re-validate only accident/title fields (the rest already passed Pass 1), save or skip
 
 **Validation gates** (`_is_valid`):
@@ -283,6 +283,10 @@ docker compose up -d db
 # Start the UI
 cd /path/to/carhunt && npm run dev    # http://localhost:3000
 
+# Expose dashboard publicly via Cloudflare quick tunnel (URL changes each run)
+cloudflared tunnel --url http://localhost:3000
+# Current tunnel: https://athletes-lines-parcel-episode.trycloudflare.com (ephemeral)
+
 # Trigger a full refresh (scrape + enrich + score)
 curl -X POST http://localhost:3000/api/refresh
 # Or directly:
@@ -330,33 +334,41 @@ PROXY_URL=...                   # optional: http://user:pass@host:port for resid
 
 ---
 
-## Active Dealer Sites (~60 total)
+## Active Dealer Sites (71 total)
 
-**Volvo (5):** Dyer & Dyer, North Point, O'Steen Athens, Mall of Georgia, Marietta — all `cobalt` type
+**Volvo (5):** Dyer & Dyer, North Point, O'Steen Athens, Mall of Georgia, Marietta — all `cobalt_dom` type (switched from `cobalt` when their DDC sites stopped firing `getInventory` XHR and moved to SSR `li.vehicle-card` DOM)
 
-**Hyundai (10):** ALM Athens, ALM West, AutoNation MoG, Jim Ellis, Rick Case Atlanta, Rick Case Roswell, South Towne, and others
+**Hyundai (9):** ALM Athens (`dealerinspire_html`), ALM West (`dealerinspire_html`), AutoNation MoG (`cobalt_dom`), Grand Hyundai Canton (`dealerinspire_html`), Hyundai of Cumming (`secureoffersites`), Hyundai of Kennesaw (`dealeron_cosmos`), Nalley Hyundai (`cobalt_dom`), Potamkin Stone Mountain (`carscommerce`), South Towne (`carscommerce`)
 
-**Kia (9):** Bulldog Athens, Carriage Alpharetta, Ed Voyles Chamblee, Jim Ellis, Kia Atlanta South, Lou Sobh, Rick Case, Calavan West, Kia MoG
+**Kia (8):** Bulldog Athens (`carscommerce`), Calavan Kia West (`cobalt_dom`), Carriage Alpharetta (`carscommerce`), Ed Voyles Chamblee (`dealeron_cosmos`), Kia Atlanta South (`dealeron_cosmos`), Kia Mall of Georgia (`cobalt_dom`), Lou Sobh (`dealerinspire_html`), Sons Kia (`dealerinspire_html`)
 
-**Volkswagen (6):** Atlanta VW, Hoover Lithia Springs, Jim Ellis, Nalley Alpharetta, Stone Mountain, VW Marietta
+**Volkswagen (6):** AutoNation MoG (`cobalt_dom`), Heritage (`dealerinspire_html`), Hoover Lithia Springs (`cobalt_dom`), Nalley Alpharetta (`cobalt_dom`), Stone Mountain (`dealerinspire_html`), VW Marietta (`dealerinspire_html`)
 
-**Buick (5):** Carl Black Roswell, Carl Black Kennesaw, Jim Ellis, Rick Hendrick Duluth, Southtowne
+**Buick (4):** Capital Buick GMC (`dealeron_cosmos`), Carl Black Kennesaw (`carscommerce`), Carl Black Roswell (`carscommerce`), Rick Hendrick Duluth (`carscommerce` dealer_id=10597, group-wide covers all RH Atlanta brands — `allowed_states` removed since location field is empty in API responses but all dealers are GA-local)
 
-**BMW (6):** Athens, Gwinnett, South Atlanta, Global Imports, Nalley Decatur, United Alpharetta
+**BMW (6):** Athens (`dealerinspire_html`), Gwinnett (`carscommerce`), South Atlanta (`dealerinspire_html`), Global Imports (`cobalt_dom`), Nalley Decatur (`cobalt_dom`), United Alpharetta (`dealerinspire_html`)
 
-**Lexus (4):** Butler South, Hennessy Gwinnett, Nalley Roswell, Nalley Smyrna — Hennessy Lexus Atlanta consolidated into Hennessy Auto Group parent
+**Cadillac (3):** Capital Cadillac Smyrna (`dealeron_cosmos`), Classic Cadillac Atlanta (`cobalt_dom`), SouthTowne Cadillac Newnan (`dealerinspire_html`)
 
-**Genesis (2):** Genesis of Gwinnett, Rick Case Genesis Roswell — both `cobalt_dom` (dealer.com platform)
+**Lexus (4):** Butler South Atlanta (`cobalt_dom`), Hennessy Gwinnett (`cobalt_dom`), Nalley Roswell (`cobalt_dom`), Nalley Smyrna (`cobalt_dom`) — Hennessy Lexus Atlanta consolidated into Hennessy Auto Group parent
+
+**Genesis (6):** Genesis of Atlanta (`ridemotive`), Genesis of Cumming (`secureoffersites`), Genesis of Gwinnett (`cobalt_dom`), Genesis of Kennesaw (`ridemotive`), Genesis of Union City (`dealerinspire_html`), Rick Case Genesis Roswell (`cobalt_dom`)
 
 **Audi (4):** Atlanta, Gwinnett, South Atlanta, North Atlanta — all `audi_one` type. Inventory URL: `/en/inventory/used/`
 
-**Multi-brand / other (~13):** ALM Cars Group (group-wide Algolia index replacing 5 overfuel sites), ALM Mazda South (separate overfuel), Amazing Luxury Cars, Nalley Kia, Heyward Allen Toyota, Gravity Autos Atlanta, Cadillac dealers (cross-brand discovery), Hennessy Auto Group (Lexus + Cadillac + JLR, `cobalt_dom` + `progressive_scroll`)
+**Toyota (4):** Atlanta Toyota (`cobalt_dom`), Cobb County Toyota (generic DOM), Marietta Toyota (generic DOM — Typesense platform, returns 0 for target makes), Nalley Toyota of Roswell (`cobalt_dom`)
 
-**ALM Cars Group:** Single `dealerinspire_algolia` entry with index `almkiasouth1_production_inventory` (app_id `YL5AFXM3DW`) covers ALM Gwinnett, Kennesaw, Mall of GA, Marietta, Roswell superstores. The 5 prior individual overfuel entries for these locations are now INACTIVE. ALM Hyundai West uses a separate Algolia app (app_id `1WNYBZLEEN`) and remains a separate active entry.
+**Multi-brand / other (12):** ALM Cars (5 `overfuel` entries: Gwinnett/Kennesaw/MoG/Marietta/Roswell), ALM Mazda South (`overfuel`), Amazing Luxury Cars (generic DOM), Gravity Autos Atlanta (`overfuel`), Hennessy Auto Group (`cobalt_dom` + `progressive_scroll` — Lexus + Cadillac + JLR), Jim Ellis All Brands (`cobalt_dom`), Nalley Kia Multi-Brand (`cobalt_dom`), Rick Case Best Value (`cobalt_dom`)
 
-**Adding a Cobalt dealer:** set `scraper_config = {"type": "cobalt"}`.
+**ALM Cars:** The group-wide `dealerinspire_algolia` entry (ALM Cars Group) is INACTIVE — its Algolia app_id is deprovisioned. The 5 individual `overfuel` entries (Gwinnett dealer_id=322, Kennesaw=321, MoG=323, Marietta=324, Roswell=326) are ACTIVE and cover the same superstores. ALM Hyundai West (app_id `1WNYBZLEEN`) and ALM Hyundai Athens are `dealerinspire_html` type.
 
-**Adding a DealerInspire Algolia dealer:** `scraper_config = {"type": "dealerinspire_algolia", "app_id": "SEWJN80HTN", "api_key": "...", "index": "{slug}_production_inventory"}`.
+**DealerInspire HTML dealers (13 active):** All 13 DI sites use `scraper_config = {"type": "dealerinspire_html"}`. At runtime, `_scrape_dealerinspire_auto_async` navigates to the inventory page with Playwright, intercepts live API requests via `page.route()` lambda predicate (matching any `carscommerce.inc` or `algolia.net` URL), and harvests fresh credentials from the page's own network traffic. All 13 dealers currently call `POST https://websites-search.api.carscommerce.inc/api/v1/listings/{dealer_id}/search` — the same API as `_scrape_carscommerce_api`. Captured dealer_id and api_key are used to make a direct filtered query (make + year) in lieu of paginating the full DOM. Falls back to DOM scraping (`_scrape_dealer_inventory_async`) if no API request fires within 10s. Inventory URL pattern is `/used-vehicles/` for most sites; Lou Sobh Kia uses `/pre-owned-vehicles/`. Do NOT use `index.htm` in URLs — DealerInspire sites 404 on that path.
+
+**Adding a Cobalt dealer (XHR-based):** set `scraper_config = {"type": "cobalt"}` for DDC sites that still fire a `getInventory` XHR. If a cobalt site stops returning listings, check whether it has migrated to SSR `li.vehicle-card` DOM — if so, switch to `cobalt_dom`.
+
+**Adding a DealerInspire HTML dealer:** set `scraper_config = {"type": "dealerinspire_html"}` and `inventory_url` to the correct path (usually `/used-vehicles/`). No API credentials needed in scraper_config — they are harvested live from the page.
+
+**Adding a DealerInspire Algolia dealer (if app_id is live):** `scraper_config = {"type": "dealerinspire_algolia", "app_id": "...", "api_key": "...", "index": "{slug}_production_inventory"}`.
 
 **CarsCommerce dealers:** BMW of Gwinnett uses `type_slugs = ["Pre-Owned", "Certified Pre-Owned"]` in scraper_config.
 
@@ -373,16 +385,20 @@ PROXY_URL=...                   # optional: http://user:pass@host:port for resid
 - **CarGurus new search format** uses `data-testid="srp-listing-tile"` DOM elements; `_dismiss_cargurus_modal()` handles the "Only show GA listings?" modal.
 - **Canonical trim normalization** — 4-pass (prefix → BMW token-reorder → whole-word substring → LLM). Engine prefix regex strips "350h ", "2.0T " etc. before matching. To prevent ingestion failures, `is_trim_allowed` also supports Pass 2 (BMW token-reorder).
 - **Title parsing LLM fallback** — `_parse_title` in `dealer_scraper.py` falls back to a cached LLM title parser (`deepseek-v4-flash` via OpenRouter) when standard regex/substring matching fails to resolve a valid make/model. Cache stored in `.title_cache.json`. Uses a strict prompt format (`{"matched": false}`) to prevent force-mapping non-target vehicles. `_llm_model_valid_for_title()` post-validates every LLM result: (1) if the matched model has a powertrain qualifier (Hybrid/PHEV/Recharge), the source title must contain one too; (2) all non-powertrain words in the model name must appear in the title. This prevents cross-variant false positives (e.g. "Elantra Hybrid" title → "Tucson Hybrid" match).
-- **Dealer scraping is parallelized** — 5 sites concurrently via `ThreadPoolExecutor(max_workers=5)`. Cobalt sites have 150s timeout (paginate via "Next" button, 2.5s each); others 90s.
+- **Dealer scraping is parallelized** — 5 sites concurrently via `ThreadPoolExecutor(max_workers=5)`. `cobalt` (XHR-intercept) and `audi_one` sites have 150s timeout; others 90s.
 - **`_add_used` coerce** uses `_int()` for price/mileage/year — handles decimal strings via `int(float(...))` to avoid stripping the decimal point into a 100x inflated value.
-- **dealerinspire_algolia year filter:** Some indexes store year as a string; Algolia numeric range filters silently return 0. Year range removed from Algolia query; filtered by `_add_used` post-scrape with `int()` cast.
+- **dealerinspire_algolia:** All `dealerinspire_algolia` entries have been deactivated — app_ids are deprovisioned or belong to non-target brands (Mazda/Toyota). The type still exists in the dispatcher for future use if a live Algolia index is found.
+- **cobalt_dom pagination:** `_scrape_cobalt_dom_async` tracks `seen_ext_ids` (VIN or href-derived) across pages and breaks immediately when a page yields no new listings. This prevents an infinite loop on DDC sites whose `?start=N` param is silently ignored (e.g. Volvo dealers that redirect to a fixed URL).
+- **cobalt_dom soft time limit:** `_t0` is set before browser launch (line ~280) so the 100s soft limit is measured from total wall time including browser setup. This ensures ≥50s remains for `browser.close()` within the `asyncio.wait_for(timeout=150)` budget — preventing a race where close() gets cancelled and partial results are lost.
+- **cobalt_dom title prefix:** `li.vehicle-card` body text may read "Used 2025 Hyundai..." — the JS evaluate block strips "Used|Pre-Owned|Certified|New" prefixes before the year-pattern match so titles are correctly parsed.
+- **`_build_dealer_com_url`** only modifies URLs that contain BOTH `index.htm` AND a CDK path (`/used-inventory/`, `/new-inventory/`, etc.). DealerInspire URLs (`/used-vehicles/`) have neither — they pass through unmodified.
 - **Orchestrator timeouts:** 60-minute watchdog; 5-minute cap per training phase; 5-minute cap per scoring phase.
 - **Anti-detection:** Browser UA rotates across Chrome 134–136 (macOS + Windows). Viewport randomizes across 5 sizes. Bot-detection check after each CarGurus/Cars.com page load.
 - **`analysis_agent.py` has no LLM.** Scores all unscored listings in a single batch using the stacked ensemble.
 - **`query_agent.py`** uses LLM (deepseek/deepseek-v4-flash via OpenRouter) for natural-language questions about the listing DB. `max_tokens=500` caps runaway responses.
 - **Filter bar is client-side.** All filtering and sorting happens in-memory in Dashboard.tsx.
 - **Cars.com model slug** uses `re.sub(r"[^a-z0-9]+", "_", model.lower())` — all non-alphanumeric chars become underscores. Old `str.replace(' ', '_')` left hyphens intact, breaking hyphenated model names.
-- **`engine_filter` is source-aware** — bypassed for `carscom` when the model name itself contains the filter keyword (slug already scopes to the right variant). Always applied for CarGurus and Carvana/CarMax where the model page may include multiple engine variants.
+- **`engine_filter` is source-aware** — bypassed for `carscom` when the model name itself contains the filter keyword (slug already scopes to the right variant). Always applied for CarGurus where the model page may include multiple engine variants.
 - **`user_notes`** — `TEXT` column on `listings`; editable via the detail panel textarea and `PATCH /api/listings/:id`. Auto-saves on blur.
 - **Stacked model pickle path** — per-model `StackedModel` dataclass saved as `price_model_{slug}.pkl`. `StackedModel.__module__` is forced to `tools.price_model` at definition time to prevent `__main__` pickle namespace issues when training via CLI.
 - **Dedup within a run:** `known_urls`, `known_vins`, `known_price_fps`, `known_dealer_fps` fetched once before the source loop, shared across all sources including dealers.

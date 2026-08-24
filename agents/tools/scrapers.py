@@ -1,5 +1,5 @@
 """
-Playwright + stealth scrapers for CarGurus, Cars.com, CarMax, and Carvana.
+Playwright + stealth scrapers for CarGurus and Cars.com.
 
 Each scraper returns raw listing dicts; the sourcing agent handles dedup,
 validation, detail-page enrichment, and DB persistence.
@@ -101,18 +101,7 @@ def _run(coro):
     return asyncio.run(coro)
 
 
-def _base_model_params(vehicles: list | None, param: str, lower: bool = True) -> str:
-    """Build deduplicated base-model query params (e.g. model=tucson or models[]=Tucson).
-    Uses the first word of each model name since sites don't distinguish Hybrid variants in URLs."""
-    seen: set[str] = set()
-    parts = []
-    for _, m in (vehicles or []):
-        base = m.split()[0]
-        key  = base.lower() if lower else base
-        if key not in seen:
-            seen.add(key)
-            parts.append(f"{param}={base.lower() if lower else base}")
-    return "&".join(parts)
+
 
 
 async def _stealth_browser(playwright):
@@ -131,205 +120,10 @@ async def _stealth_browser(playwright):
     return browser, context
 
 
-# ---------------------------------------------------------------------------
-# Carvana
-# ---------------------------------------------------------------------------
-
-async def _scrape_carvana_async(zip_code, makes, max_price, max_mileage, min_year, vehicles=None, max_year=None):
-    # Carvana is nationwide — no radius param. Model filter uses base name only;
-    # hybrid vs non-hybrid is indistinguishable in the URL so _is_valid() handles post-scrape.
-    make_str  = "&".join(f"make={m.lower()}" for m in makes)
-    model_str = _base_model_params(vehicles, "model")
-    year_max_str = f"&maxYear={max_year}" if max_year else ""
-    url = (
-        f"https://www.carvana.com/cars?"
-        f"zip={zip_code}&maxPrice={max_price}&maxMileage={max_mileage}"
-        f"&minYear={min_year}{year_max_str}&{make_str}"
-        + (f"&{model_str}" if model_str else "")
-    )
-
-    def _parse_carvana_items(raw_items):
-        listings = []
-        for item in raw_items:
-            try:
-                offers = item.get("offers", {})
-                price = offers.get("price")
-                listing_url = offers.get("url", "")
-                vid_m = re.search(r"/vehicle/(\d+)", listing_url)
-                external_id = vid_m.group(1) if vid_m else str(item.get("sku", ""))
-                desc = item.get("description", "")
-                trim_m = re.search(r"(?:Used|Certified(?: Used)?|Pre-Owned)?\s*\d{4}\s+\S+\s+\S+\s+(.+?)\s+with\s+\d+", desc, re.IGNORECASE)
-                trim = trim_m.group(1).strip() if trim_m else None
-                # Fallback: extract trim from URL slug (e.g. /vehicle/2025-toyota-rav4-xle-premium-...)
-                if not trim and listing_url:
-                    slug_m = re.search(r"/vehicle/\d{4}-[a-z]+-[a-z0-9]+-([a-z0-9][a-z0-9-]+?)-[A-Z0-9]{17}", listing_url)
-                    if slug_m:
-                        trim = slug_m.group(1).replace("-", " ").title()
-                if not price or not external_id:
-                    continue
-                listings.append({
-                    "source": "carvana",
-                    "condition": "used",
-                    "external_id": external_id,
-                    "vin": item.get("vehicleIdentificationNumber"),
-                    "make": item.get("manufacturer", item.get("brand", "")),
-                    "model": item.get("model", ""),
-                    "trim": trim,
-                    "year": item.get("modelDate"),
-                    "body_type": None,
-                    "mileage": item.get("mileageFromOdometer"),
-                    "price": int(price),
-                    "dealer_name": "Carvana",
-                    "dealer_phone": None,
-                    "dealer_email": None,
-                    "listing_url": listing_url or f"https://www.carvana.com/vehicle/{external_id}",
-                    "photos_url": [item["image"]] if item.get("image") else [],
-                    "title_status": "clean",
-                    "accident_count": 0,
-                    "raw": item,
-                })
-            except Exception:
-                continue
-        return listings
-
-    async def _fetch_carvana_items(page):
-        return await page.evaluate("""() => {
-            const scripts = document.querySelectorAll('script[data-testid="vehicle-ld"]');
-            return Array.from(scripts).map(s => {
-                try { return JSON.parse(s.textContent); } catch(e) { return null; }
-            }).filter(Boolean);
-        }""")
-
-    async with Stealth().use_async(async_playwright()) as p:
-        browser, ctx = await _stealth_browser(p)
-        page = await ctx.new_page()
-        try:
-            await page.goto(url, wait_until="domcontentloaded", timeout=30_000)
-            await page.wait_for_timeout(8_000)
-            # Scroll to load all lazy-loaded listings
-            items = []
-            prev_count = -1
-            for _ in range(6):
-                await page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
-                await page.wait_for_timeout(2_000)
-                items = await _fetch_carvana_items(page)
-                if len(items) == prev_count:
-                    break
-                prev_count = len(items)
-            return _parse_carvana_items(items)
-        finally:
-            await browser.close()
 
 
-def scrape_carvana(zip_code, makes, max_price, max_mileage, min_year, vehicles=None, max_year=None):
-    return _run(_scrape_carvana_async(zip_code, makes, max_price, max_mileage, min_year, vehicles=vehicles, max_year=max_year))
 
 
-# ---------------------------------------------------------------------------
-# CarMax
-# ---------------------------------------------------------------------------
-
-def _parse_carmax_tile(text: str, stock_num: str, min_year: int) -> dict | None:
-    lines = [l.strip() for l in text.splitlines() if l.strip()]
-    name_line = next((l for l in lines if re.match(r"^\d{4} ", l)), None)
-    if not name_line:
-        return None
-    parts = name_line.split()
-    if len(parts) < 3:
-        return None
-    year = int(parts[0])
-    if year < min_year:
-        return None
-    make = parts[1]
-    model = parts[2]
-    trim = " ".join(parts[3:]) if len(parts) > 3 else None
-    price_m = re.search(r"\$([0-9,]+)\*?", text)
-    if not price_m:
-        return None
-    price = int(price_m.group(1).replace(",", ""))
-    mi_m = re.search(r"([\d,]+)K mi|([\d,]+) mi", text)
-    if mi_m:
-        raw = (mi_m.group(1) or mi_m.group(2)).replace(",", "")
-        mileage = int(raw) * 1000 if mi_m.group(1) else int(raw)
-    else:
-        mileage = None
-    return {
-        "source": "carmax",
-        "condition": "used",
-        "external_id": stock_num,
-        "vin": None,
-        "make": make,
-        "model": model,
-        "trim": trim,
-        "year": year,
-        "body_type": None,
-        "mileage": mileage,
-        "price": price,
-        "dealer_name": "CarMax",
-        "dealer_phone": None,
-        "dealer_email": None,
-        "listing_url": f"https://www.carmax.com/car/{stock_num}",
-        "photos_url": [],
-        "title_status": "clean",
-        "accident_count": 0,
-        "raw": {"text": text},
-    }
-
-
-async def _scrape_carmax_async(zip_code, makes, max_price, max_mileage, min_year, radius=500, vehicles=None, max_year=None):
-    make_str  = "&".join(f"makes[]={m}" for m in makes)
-    # CarMax model codes use base model only (no "Hybrid" suffix in URL)
-    model_str = _base_model_params(vehicles, "models[]", lower=False)
-    year_max_str = f"&maxYear={max_year}" if max_year else ""
-    url = (
-        f"https://www.carmax.com/cars?"
-        f"zip={zip_code}&maxPrice={max_price}&maxMileage={max_mileage}"
-        f"&minYear={min_year}{year_max_str}&radius={radius}&{make_str}"
-        + (f"&{model_str}" if model_str else "")
-    )
-
-    async def _fetch_tiles(page):
-        return await page.evaluate("""() => {
-            const els = document.querySelectorAll('[data-id]');
-            return Array.from(els).map(el => ({
-                stock: el.getAttribute('data-id'),
-                text: el.innerText
-            })).filter(t => t.stock && /\\d{4} /.test(t.text));
-        }""")
-
-    async with Stealth().use_async(async_playwright()) as p:
-        browser, ctx = await _stealth_browser(p)
-        page = await ctx.new_page()
-        try:
-            await page.goto(url, wait_until="domcontentloaded", timeout=30_000)
-            await page.wait_for_timeout(8_000)
-            # Scroll to trigger lazy loading
-            tiles: list[dict] = []
-            prev_count = -1
-            for _ in range(5):
-                await page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
-                await page.wait_for_timeout(2_000)
-                tiles = await _fetch_tiles(page)
-                if len(tiles) == prev_count:
-                    break
-                prev_count = len(tiles)
-            listings = []
-            seen = set()
-            for tile in tiles:
-                stock = tile["stock"]
-                if stock in seen:
-                    continue
-                seen.add(stock)
-                parsed = _parse_carmax_tile(tile["text"], stock, min_year)
-                if parsed:
-                    listings.append(parsed)
-            return listings
-        finally:
-            await browser.close()
-
-
-def scrape_carmax(zip_code, makes, max_price, max_mileage, min_year, radius=500, vehicles=None, max_year=None):
-    return _run(_scrape_carmax_async(zip_code, makes, max_price, max_mileage, min_year, radius=radius, vehicles=vehicles, max_year=max_year))
 
 
 # ---------------------------------------------------------------------------
@@ -371,9 +165,15 @@ def _parse_cargurus_blade(text: str, href: str, expected_model: str | None = Non
         actual_base = parts[2].lower() if len(parts) > 2 else ""
         if actual_base != expected_base:
             return None
-        # If the page is a Hybrid model but the listing text doesn't say Hybrid,
-        # this is a sponsored cross-variant listing — reject it.
-        if "hybrid" in expected_model.lower() and "hybrid" not in name_line.lower() and "hybrid" not in text.lower():
+        # If the page is a Hybrid/PHEV/Recharge model but the listing text doesn't contain
+        # the powertrain keyword, this is a sponsored cross-variant listing — reject it.
+        em_lower = expected_model.lower()
+        full_blade_text = (name_line + " " + text).lower()
+        if "hybrid" in em_lower and "hybrid" not in full_blade_text:
+            return None
+        if "phev" in em_lower and not any(kw in full_blade_text for kw in ("phev", "plug-in", "plugin")):
+            return None
+        if "recharge" in em_lower and not any(kw in full_blade_text for kw in ("recharge", "t8", "plug-in", "phev")):
             return None
         model = expected_model
         em = expected_model.strip()
@@ -715,10 +515,12 @@ async def _scrape_carscom_async(zip_code, makes, max_price, max_mileage, min_yea
                 seen.add(lid)
                 try:
                     d = json.loads(card["details"])
-                    price = int(d.get("price") or 0)
+                    raw_price = d.get("price")
+                    price = int(re.sub(r"[^0-9]", "", str(raw_price))) if raw_price else 0
                     if price < 5000:
                         continue
-                    mileage = int(d.get("mileage") or 0) or None
+                    raw_mileage = d.get("mileage")
+                    mileage = int(re.sub(r"[^0-9]", "", str(raw_mileage))) if raw_mileage else None
                     deal_rating = next(
                         (r for r in ("Great Deal", "Good Deal", "Fair Deal", "High Price", "Overpriced")
                          if r in card["text"]), None
@@ -812,12 +614,13 @@ def _parse_history(text: str) -> dict:
     owner_m = re.search(r"(\d+)\s+previous\s+owner", text_lower)
     owner_count = int(owner_m.group(1)) if owner_m else None
 
-    # Mileage: look for patterns like "28,344 miles", "28344 mi", "Mileage: 28,344"
+    # Mileage: look for explicit patterns first ("Mileage: 28,344", "Odometer: 28,344"),
+    # then generic "X miles" excluding "miles away", "miles from", "miles radius"
     mileage = None
     for pat in [
-        r"([\d,]+)\s*miles?\b",
-        r"mileage[:\s]+([\d,]+)",
         r"odometer[:\s]+([\d,]+)",
+        r"mileage[:\s]+([\d,]+)",
+        r"([\d,]+)\s*miles?\b(?!\s+(?:away|from|radius|of))",
     ]:
         mm = re.search(pat, text_lower)
         if mm:

@@ -24,6 +24,7 @@ import random
 import re
 import requests
 import sys
+import time
 from datetime import datetime
 from urllib.parse import urlparse, parse_qs, urlencode
 
@@ -276,6 +277,8 @@ async def _scrape_cobalt_dom_async(inventory_url: str, brand: str,
             await pg.wait_for_timeout(150)
         await pg.wait_for_timeout(1000)
 
+    _t0 = time.monotonic()  # Start before browser launch so soft limit accounts for setup time
+
     async with Stealth().use_async(async_playwright()) as p:
         browser, ctx = await _stealth_browser(p)
         page = await ctx.new_page()
@@ -283,6 +286,7 @@ async def _scrape_cobalt_dom_async(inventory_url: str, brand: str,
         try:
             start = 0
             page_size = 24  # DDC SSR default
+            seen_ext_ids: set[str] = set()  # dedup by ext_id across pages (catches VIN-less cards)
 
             while True:
                 parsed = urlparse(filtered_url)
@@ -299,9 +303,11 @@ async def _scrape_cobalt_dom_async(inventory_url: str, brand: str,
                     const cards = [...document.querySelectorAll('li.vehicle-card')];
                     return cards.map(card => {
                         // Title: first line matching "YYYY Make ..." pattern
+                        // Strip common prefixes like "Used 2025 ..." before year check
                         const bodyText = card.innerText || '';
                         const titleLine = bodyText.split('\\n')
                             .map(l => l.trim())
+                            .map(l => l.replace(/^(Used|Pre-Owned|Certified Pre-Owned|Certified|New)\\s+/i, ''))
                             .find(l => /^\\d{4}\\s+[A-Z]/.test(l)) || '';
 
                         // VIN from roadster button or any data-vin attr
@@ -333,10 +339,14 @@ async def _scrape_cobalt_dom_async(inventory_url: str, brand: str,
                 if not cards_data:
                     break
 
+                prev_count = len(inventory)
                 skipped = 0
                 for card in cards_data:
                     vin = card.get("vin")
-                    if vin and vin in seen_vins:
+                    href = card.get("href") or inventory_url
+                    ext_id = vin or re.sub(r'[^a-z0-9]', '', href.lower())[-20:]
+
+                    if ext_id in seen_ext_ids:
                         skipped += 1
                         continue
 
@@ -352,14 +362,15 @@ async def _scrape_cobalt_dom_async(inventory_url: str, brand: str,
 
                     mileage = int(card["mileage"]) if card.get("mileage") else None
                     price = int(card["price"]) if card.get("price") else None
-                    href = card.get("href") or inventory_url
                     is_cpo = is_cpo_page or card.get("isCpo", False)
 
                     if not price:
                         skipped += 1
                         continue
 
-                    ext_id = vin or re.sub(r'[^a-z0-9]', '', href.lower())[-20:]
+                    seen_ext_ids.add(ext_id)
+                    if vin:
+                        seen_vins.add(vin)
                     inventory.append(_make_listing(
                         brand, ext_id,
                         vin=vin, make=make, model=model, trim=trim or None,
@@ -370,13 +381,21 @@ async def _scrape_cobalt_dom_async(inventory_url: str, brand: str,
                         insights={"cpo": is_cpo} if is_cpo else None,
                         raw={"title": title, "vin": vin, "price": price, "mileage": mileage},
                     ))
-                    if vin:
-                        seen_vins.add(vin)
 
                 if skipped:
-                    print(f"    [cobalt_dom] page start={start}: {len(cards_data) - skipped} parsed, {skipped} skipped (no title/price/vin-dup)", flush=True)
+                    print(f"    [cobalt_dom] page start={start}: {len(inventory) - prev_count} parsed, {skipped} skipped (no title/price/vin-dup)", flush=True)
+
+                # Stop if no new listings appeared (pagination not supported or last page)
+                if len(inventory) == prev_count:
+                    break
 
                 if len(cards_data) < page_size:
+                    break
+
+                # Soft time limit: return partial results rather than being killed by asyncio.wait_for.
+                # _t0 includes browser setup so 100s leaves ~50s for browser.close() within the 150s budget.
+                if time.monotonic() - _t0 > 100:
+                    print(f"    [cobalt_dom] soft time limit — returning {len(inventory)} listings so far", flush=True)
                     break
 
                 start += page_size
@@ -663,8 +682,6 @@ def _scrape_dealerinspire_algolia(app_id: str, api_key: str, index: str, brand: 
         year_filter += f" AND year >= {min_year}"
     if max_year:
         year_filter += f" AND year <= {max_year}"
-    # Try with year filter first; some indexes store year as a string so numeric range
-    # returns 0 — detect that and retry without year filter on the first page.
     year_filter_active = bool(year_filter)
     active_filters = algolia_filters + year_filter
 
@@ -745,6 +762,105 @@ def _scrape_dealerinspire_algolia(app_id: str, api_key: str, index: str, brand: 
         page += 1
 
     return listings
+
+
+async def _scrape_dealerinspire_auto_async(
+    inventory_url: str, brand: str,
+    makes: list[str] | None = None,
+    min_year: int = 0, max_year: int | None = None,
+) -> list[dict]:
+    """Navigate to a DealerInspire inventory page, intercept the live API
+    request (CarsCommerce or Algolia), harvest credentials, then run a
+    filtered API query.  Falls back to DOM scraping if no request fires."""
+    captured: dict = {}
+    base_url = "/".join(inventory_url.split("/")[:3])
+
+    async with Stealth().use_async(async_playwright()) as p:
+        browser, ctx = await _stealth_browser(p)
+        page = await ctx.new_page()
+        try:
+            async def _on_route(route, request):
+                url = request.url
+                if not captured:
+                    # CarsCommerce: same API that BMW of Gwinnett uses
+                    m_cc = re.search(r"carscommerce\.inc/api/v1/listings/(\d+)/search", url)
+                    if m_cc and request.method == "POST":
+                        api_key = request.headers.get("x-api-key", "")
+                        if api_key:
+                            try:
+                                body = json.loads(request.post_data or "{}")
+                                type_slugs = (body.get("facetFilters") or {}).get("type_slug")
+                            except Exception:
+                                type_slugs = None
+                            captured.update({"type": "carscommerce",
+                                             "dealer_id": m_cc.group(1),
+                                             "api_key": api_key,
+                                             "type_slugs": type_slugs})
+                    # Algolia: fallback for sites that still use it directly
+                    elif "algolia.net" in url and "/1/indexes/" in url:
+                        h = request.headers
+                        app_id = h.get("x-algolia-application-id")
+                        if app_id:
+                            m_al = re.search(r"/1/indexes/([^/*][^/]*)/", url)
+                            if m_al:
+                                captured.update({"type": "algolia", "app_id": app_id,
+                                                 "api_key": h.get("x-algolia-api-key", ""),
+                                                 "index": m_al.group(1)})
+                            elif "*/queries" in url:
+                                try:
+                                    body = json.loads(request.post_data or "{}")
+                                    idx = (body.get("requests") or [{}])[0].get("indexName", "")
+                                    if idx:
+                                        captured.update({"type": "algolia", "app_id": app_id,
+                                                         "api_key": h.get("x-algolia-api-key", ""),
+                                                         "index": idx})
+                                except Exception:
+                                    pass
+                await route.continue_()
+
+            # Lambda predicate avoids glob-vs-hostname issues (glob * doesn't cross /)
+            await page.route(
+                lambda url: "carscommerce.inc" in url or "algolia.net" in url,
+                _on_route,
+            )
+            try:
+                await page.goto(inventory_url, wait_until="domcontentloaded", timeout=20_000)
+            except Exception:
+                pass
+
+            # Poll up to 10s for an API request to fire
+            for _ in range(50):
+                if captured:
+                    break
+                await page.wait_for_timeout(200)
+        finally:
+            try:
+                await ctx.close()
+            except Exception:
+                pass
+            try:
+                await browser.close()
+            except Exception:
+                pass
+
+    if captured.get("type") == "carscommerce":
+        print(f"    [di_auto] CarsCommerce dealer {captured['dealer_id']}", flush=True)
+        return _scrape_carscommerce_api(
+            captured["dealer_id"], captured["api_key"], brand, base_url,
+            type_slugs=captured.get("type_slugs"),
+            makes=makes, min_year=min_year, max_year=max_year,
+        )
+    if captured.get("type") == "algolia":
+        print(f"    [di_auto] Algolia index {captured['index']}", flush=True)
+        return _scrape_dealerinspire_algolia(
+            captured["app_id"], captured["api_key"], captured["index"],
+            brand, inventory_url, makes, min_year, max_year,
+        )
+
+    print(f"    [di_auto] no API request intercepted — falling back to DOM", flush=True)
+    return await _scrape_dealer_inventory_async(
+        inventory_url, brand, makes=makes, min_year=min_year, max_year=max_year
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -2078,6 +2194,15 @@ def scrape_dealer(site: dict, makes: list[str] | None = None,
                     cfg["app_id"], cfg["api_key"], cfg["index"], site["brand"],
                     site.get("website_url", site["inventory_url"]),
                     makes, min_year, max_year,
+                ))
+            elif cfg.get("type") == "dealerinspire_html":
+                # DealerInspire sites: intercept live Algolia credentials from the page's
+                # own network requests, then query Algolia directly with make/year filters.
+                # Falls back to DOM scraping if no Algolia request fires.
+                _add_used(_run_with_timeout(
+                    _scrape_dealerinspire_auto_async(site["inventory_url"], site["brand"],
+                                                      makes=makes, min_year=min_year, max_year=max_year),
+                    timeout=SITE_TIMEOUT_SECONDS,
                 ))
             elif cfg.get("type") == "carscommerce":
                 _add_used(_scrape_carscommerce_api(

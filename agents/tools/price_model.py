@@ -23,6 +23,9 @@ import os
 import re
 from dataclasses import dataclass
 from datetime import datetime
+from dotenv import load_dotenv
+
+load_dotenv(os.path.join(os.path.dirname(__file__), "..", "..", ".env.local"))
 
 import joblib
 import numpy as np
@@ -62,8 +65,9 @@ class StackedModel:
 StackedModel.__module__ = "tools.price_model"
 
 import sys
-# Make StackedModel available in __main__ so that any legacy/locally trained models
-# pickled as __main__.StackedModel can still be unpickled successfully.
+# Register this module in sys.modules under "tools.price_model" if executed as __main__
+if __name__ == "__main__":
+    sys.modules["tools.price_model"] = sys.modules["__main__"]
 sys.modules["__main__"].StackedModel = StackedModel
 
 
@@ -246,13 +250,7 @@ def _is_cpo(row: dict) -> bool:
         raw_text = raw.lower()
         
     text = f" {trim} {model} {raw_text} "
-    if any(k in text for k in (" cpo ", " certified ", "certified pre-owned", "certified preowned")):
-        if "carvana certified" in text or "carmax certified" in text:
-            subtext = text.replace("carvana certified", "").replace("carmax certified", "")
-            return any(k in subtext for k in (" cpo ", " certified ", "certified pre-owned", "certified preowned"))
-        return True
-        
-    return False
+    return any(k in text for k in (" cpo ", " certified ", "certified pre-owned", "certified preowned"))
 
 
 # Trim-level drivetrain overrides — when the trim name alone determines drivetrain.
