@@ -50,7 +50,7 @@ carhunt/
 | Lexus | NX 350h | d2294 | Premium, Luxury, F SPORT | 2022–2024 |
 | Volvo | XC40 | d2624 | Plus, Ultimate (B4 FWD or B5 AWD) | 2023–2025 |
 | Volvo | XC60 | d1629 | Plus, Ultimate (B5 gas or Recharge T8 PHEV) | 2023–2025 |
-| Audi | Q5 | d1988 | Premium, Premium Plus, Prestige | 2022–2025 |
+| Audi | Q5 | d1988 | Premium Plus, Prestige | 2022–2025 |
 
 **Search params** (stored in `user_settings` DB table):
 - Zip: 30328 · Radius: 100 mi · Max price: $45k · Years: 2025–2026
@@ -64,7 +64,7 @@ carhunt/
 - BMW X1 2023–2025: xDrive28i only (always AWD). sDrive28i and M35i excluded.
 - BMW X3 2022–2025: sDrive30i (RWD, ≤2024 only), xDrive30i (AWD). M40i excluded.
 - Buick Encore GX: Avenir trim only (top trim, always AWD). 2024+.
-- Audi Q5: Premium/Premium Plus/Prestige, 2022–2025. FWD or Quattro AWD.
+- Audi Q5: Premium Plus/Prestige, 2022–2025. FWD or Quattro AWD.
 - Lexus NX 350h 2022–2024: always AWD. Trim allowlist filters out NX 450h+ variants.
 - Volvo XC40: B4 = FWD, B5 = AWD (detected from trim text). No Recharge electric.
 - Volvo XC60: includes both B5 gas/MHEV (AWD) and Recharge T8 PHEV (eAWD). Stored as separate model names `"XC60"` and `"XC60 Recharge"` in the DB. `detect_powertrain` uses "recharge" keyword to classify PHEV.

@@ -165,7 +165,7 @@
     {
       "make": "Audi", "model": "Q5", "cargurus_id": "d1988",
       "cargurus_search_path": "m19/d1988",
-      "trims": ["Premium", "Premium Plus", "Prestige"],
+      "trims": ["Premium Plus", "Prestige"],
       "min_year": 2022, "max_year": 2025,
       "msrp": {
         "2022": { "Premium": 43300, "Premium Plus": 51100, "Prestige": 57700 },
