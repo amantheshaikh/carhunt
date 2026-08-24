@@ -7,7 +7,7 @@ Per-source flow:
          existing listings → update price if changed.
   3. 30-day global expiry runs at the end of each full refresh.
 
-Sources: CarGurus, Cars.com, CarMax, Carvana, dealer sites.
+Sources: CarGurus, Cars.com, dealer sites.
 (AutoTrader blocked by Akamai; Edmunds blocked at network level.)
 """
 import json
@@ -26,7 +26,7 @@ sys.stdout.reconfigure(line_buffering=True)
 from psycopg2.errors import UniqueViolation
 from tools.db import fetch_one, fetch_all, execute, get_conn
 from tools.scrapers import (
-    scrape_cargurus, scrape_carmax, scrape_carvana,
+    scrape_cargurus,
     scrape_carscom, enrich_listings_from_detail,
 )
 from tools.dealer_scraper import scrape_all_dealers
@@ -38,11 +38,7 @@ MIN_HOURS_BETWEEN_RUNS = 6
 SCRAPERS = {
     "cargurus":   scrape_cargurus,
     "carscom":    scrape_carscom,
-    "carmax":     scrape_carmax,
-    "carvana":    scrape_carvana,
 }
-
-DEALER_SOURCE = "dealer"
 
 
 _FORCE_MODE = False  # set to True by run(..., force=True) to bypass cooldown without DB changes
@@ -81,13 +77,12 @@ def _should_skip_source(source: str) -> tuple[bool, str]:
     if source_errors and source_errors.get(source):
         return False, f"last run had error for {source}"
 
-    prev_count = source_results.get(source, 0)
     active_count = fetch_one(
         "SELECT count(*) AS n FROM listings WHERE source = %s AND status NOT IN ('dismissed','purchased')",
         (source,)
     )["n"]
 
-    if prev_count > 0 and active_count > 0:
+    if active_count > 0:
         return True, f"scraped {age_hours:.1f}h ago, {active_count} active listings still fresh"
 
     return False, "no active listings from this source"
@@ -257,6 +252,7 @@ def _save_new(listing: dict) -> None:
 def _touch_existing(source: str, external_id: str, new_price: int, old_price: int) -> bool:
     """Update last_seen_at and price atomically. Returns True if price changed."""
     price_changed = new_price != old_price
+    price_dropped = new_price < old_price
     conn = get_conn()
     try:
         with conn:
@@ -266,11 +262,17 @@ def _touch_existing(source: str, external_id: str, new_price: int, old_price: in
                     (new_price, source, external_id),
                 )
                 # Re-activate listings the user marked expired if they've come back on market.
-                # Don't touch 'purchased' or 'dismissed' — those are intentional user states.
                 cur.execute(
                     "UPDATE listings SET status = 'active' WHERE source = %s AND external_id = %s AND status = 'expired'",
                     (source, external_id),
                 )
+                # Re-activate dismissed listings ONLY if the dealer dropped the price.
+                # If price is unchanged or went up, keep dismissed to respect user manual dismissal (e.g. accidents, unwanted options/colors).
+                if price_dropped:
+                    cur.execute(
+                        "UPDATE listings SET status = 'active' WHERE source = %s AND external_id = %s AND status = 'dismissed'",
+                        (source, external_id),
+                    )
                 if price_changed:
                     cur.execute(
                         "DELETE FROM listing_scores WHERE listing_id = "
@@ -312,7 +314,7 @@ def process_source(
     kwargs: dict = {}
     if max_year:
         kwargs["max_year"] = max_year
-    if source in ("cargurus", "carmax", "carscom"):
+    if source in ("cargurus", "carscom"):
         kwargs["radius"] = radius
     if source == "carscom":
         kwargs["clean_history"] = True
@@ -340,9 +342,9 @@ def process_source(
 
     known              = _get_known_ids(source)
     if known_urls is not None and known_vins is not None:
-        _known_urls, _known_vins = known_urls, known_vins
+        known_urls_set, known_vins_set = known_urls, known_vins
     else:
-        _known_urls, _known_vins = _get_known_urls_and_vins()
+        known_urls_set, known_vins_set = _get_known_urls_and_vins()
     known_price_fps, known_dealer_fps = _get_known_fingerprints(source)
     new_count = 0
     updated_count = 0
@@ -357,7 +359,7 @@ def process_source(
             skipped_count += 1
             continue
         # Check same-source ext_id FIRST so price updates always reach _touch_existing,
-        # even when the listing URL is already in _known_urls (which would otherwise
+        # even when the listing URL is already in known_urls_set (which would otherwise
         # short-circuit the ext_id check and silently drop price drops).
         ext_id = str(listing["external_id"])
         if ext_id in known:
@@ -365,7 +367,7 @@ def process_source(
             continue
         # New ext_id — apply cross-source dedup before treating as a candidate.
         vin = listing.get("vin")
-        if vin and vin in _known_vins:
+        if vin and vin in known_vins_set:
             skipped_count += 1
             continue
         fp = (listing.get("year"), listing.get("mileage"), listing.get("price"))
@@ -377,7 +379,7 @@ def process_source(
             skipped_count += 1
             continue
         url = listing.get("listing_url", "")
-        if url and url in _known_urls:
+        if url and url in known_urls_set:
             skipped_count += 1
             continue
         candidates.append(listing)
@@ -387,7 +389,6 @@ def process_source(
     # so we reset them here and reject any listing that times out or fails to enrich.
     # Optional sources (dealer): scrapers already set accident=0/title=clean; enrichment
     # is best-effort to extract LLM insights (CPO, packages, price_drop, owner_notes).
-    # CarMax and Carvana carry full history data from their own scrapers — no enrichment needed.
     _ENRICHMENT_REQUIRED = {"cargurus", "carscom"}
     _ENRICHMENT_OPTIONAL = {"dealer"}
     if candidates and source in (_ENRICHMENT_REQUIRED | _ENRICHMENT_OPTIONAL):
@@ -421,8 +422,8 @@ def process_source(
             vin = listing.get("vin")
             url = listing.get("listing_url", "")
             _save_new(listing)
-            if vin: _known_vins.add(vin)
-            _known_urls.add(url)
+            if vin: known_vins_set.add(vin)
+            known_urls_set.add(url)
             cur_fp = (listing.get("year"), listing.get("mileage"), listing.get("price"))
             if all(v is not None for v in cur_fp):
                 known_price_fps.add(cur_fp)
@@ -550,10 +551,10 @@ def run(run_id: str = "", force: bool = False) -> dict:
                     except Exception as e:
                         print(f"  [dealer] save error ({ext_id}): {e}", flush=True)
                         dealer_skipped += 1
-            source_results[DEALER_SOURCE] = dealer_total
+            source_results["dealer"] = dealer_total
             print(f"  [dealer] {dealer_new} new, {dealer_skipped} filtered from {dealer_total} raw", flush=True)
         except Exception as e:
-            source_errors[DEALER_SOURCE] = str(e)
+            source_errors["dealer"] = str(e)
             print(f"  [dealer] ERROR: {e}", flush=True)
 
         return {"source_results": source_results, "source_errors": source_errors}

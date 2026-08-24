@@ -5,11 +5,11 @@ Triggered on demand via the dashboard "Refresh Now" button or by running directl
 import concurrent.futures
 import json
 import os
-import signal
 import subprocess
 import sys
 import threading
 import time
+import traceback
 from datetime import datetime
 from dotenv import load_dotenv
 

@@ -13,8 +13,8 @@ Two modes:
     and the original raw trim is not stored. Use --mode rescrape for that.
 
   rescrape
-    Deletes all rows for the model and re-collects from CarGurus, Cars.com,
-    Carvana, and CarMax using current detection logic. Requires Playwright.
+    Deletes all rows for the model and re-collects from CarGurus and Cars.com
+    using current detection logic. Requires Playwright.
     Takes 5–15 minutes per model. Fixes everything, including B4/B5 drivetrain.
 
 Usage:

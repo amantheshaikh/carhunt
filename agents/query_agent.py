@@ -31,7 +31,7 @@ Database schema (PostgreSQL):
 
 listings
   id uuid PK
-  source text          -- 'cargurus' | 'carscom' | 'carmax' | 'carvana' | 'dealer'
+  source text          -- 'cargurus' | 'carscom' | 'dealer'
   condition text       -- 'new' | 'used'
   make text, model text, trim text, year int
   body_type text       -- 'sedan' | 'suv' | 'crossover'

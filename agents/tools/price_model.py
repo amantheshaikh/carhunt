@@ -38,7 +38,7 @@ from sklearn.preprocessing import StandardScaler
 
 from tools.db import fetch_all
 from tools.scoring import detect_drivetrain, detect_powertrain
-from tools.base_trims import _VEHICLES as _VEH_LIST, canonical_trim
+from tools.base_trims import _VEHICLES as _VEH_LIST, canonical_trim, _norm
 
 
 @dataclass
@@ -124,6 +124,11 @@ def _trim_level(model: str, trim: str | None) -> float:
     return float(best) if best is not None else 2.5
 
 
+def _fallback_trim_premium(model: str, trim: str | None) -> float:
+    current_ord = _trim_level(model, trim)
+    return float((current_ord - 1.0) * 2000.0)
+
+
 def _trim_premium(row: dict) -> float:
     make = (row.get("make") or "").lower().strip()
     model = (row.get("model") or "").lower().strip()
@@ -142,28 +147,24 @@ def _trim_premium(row: dict) -> float:
             break
             
     if not v or "msrp" not in v:
-        current_ord = _trim_level(model, trim)
-        return float((current_ord - 1.0) * 2000.0)
+        return _fallback_trim_premium(model, trim)
         
     msrp_table = v["msrp"]
     if not msrp_table:
-        current_ord = _trim_level(model, trim)
-        return float((current_ord - 1.0) * 2000.0)
+        return _fallback_trim_premium(model, trim)
         
     # Get closest year's MSRP list
     year_str = str(year)
     if year_str not in msrp_table:
         years = sorted([int(y) for y in msrp_table.keys()])
         if not years:
-            current_ord = _trim_level(model, trim)
-            return float((current_ord - 1.0) * 2000.0)
+            return _fallback_trim_premium(model, trim)
         closest_yr = min(years, key=lambda y: abs(y - year))
         year_str = str(closest_yr)
         
     msrp_year_table = msrp_table[year_str]
     if not msrp_year_table:
-        current_ord = _trim_level(model, trim)
-        return float((current_ord - 1.0) * 2000.0)
+        return _fallback_trim_premium(model, trim)
         
     base_msrp = min(msrp_year_table.values())
     
@@ -210,8 +211,7 @@ def _trim_premium(row: dict) -> float:
     if best_key:
         return float(msrp_year_table[best_key] - base_msrp)
         
-    current_ord = _trim_level(model, trim)
-    return float((current_ord - 1.0) * 2000.0)
+    return _fallback_trim_premium(model, trim)
 
 
 def _is_cpo(row: dict) -> bool:
@@ -397,7 +397,7 @@ _PLATFORM_MIN_YEAR: dict[str, int] = {
 
 def load_training_data_for(model_name: str, powertrain_filter: str | None = None) -> tuple[list, list]:
     key = model_name.lower()
-    norm_key = key.replace("-", "").replace(" ", "")
+    norm_key = _norm(model_name)
     platform_min          = _PLATFORM_MIN_YEAR.get(norm_key, 0)
     target_min, target_max = _MODEL_YEAR_RANGE.get(key, (0, None))
     effective_min         = max(platform_min, target_min)

@@ -122,7 +122,7 @@ export default function ListingDetail({ listing: l, onClose, onAction }: Props) 
             {l.year} {l.make} {l.model} {l.trim && <span className="text-zinc-400 font-normal text-base">{l.trim}</span>}
           </h2>
           <p className="text-zinc-400 text-sm capitalize">
-            {({cargurus:"CarGurus",carscom:"Cars.com",carmax:"CarMax",carvana:"Carvana",dealer:"Dealer"}[l.source]??l.source.replace("_new",""))} · {l.condition === "new" ? "New" : "Used"}{l.body_type ? ` · ${l.body_type}` : ""}
+            {({cargurus:"CarGurus",carscom:"Cars.com",dealer:"Dealer"}[l.source]??l.source.replace("_new",""))} · {l.condition === "new" ? "New" : "Used"}{l.body_type ? ` · ${l.body_type}` : ""}
           </p>
         </div>
         <button onClick={onClose} className="text-zinc-500 hover:text-zinc-300 text-xl leading-none">×</button>

@@ -1,11 +1,10 @@
 """
 Staged market data collector — nationwide pricing.
-Sources: CarGurus, Cars.com, Carvana, CarMax (all four working scrapers).
+Sources: CarGurus, Cars.com (working scrapers).
 Varies year range and mileage cap per stage to cover all price buckets.
 
 CarGurus and Cars.com listings are enriched (detail-page fetch) before insert
 so that accident and title data is checked — same heuristics as active listings.
-CarMax and Carvana screen their own inventory so no enrichment is needed.
 
 Run:
   python3 training_collector.py           # standard (2025-2026, ≤$55k)
@@ -29,7 +28,7 @@ from tools.db import execute, fetch_one, refresh_self_computed_medians
 from tools.base_trims import get_allowed_makes, get_allowed_models, get_vehicles, _norm, is_trim_allowed, is_trim_allowed_for_training, canonical_trim, get_model_min_year, get_model_max_year, normalize_listing_model, _VEHICLES
 from tools.scoring import detect_powertrain, detect_drivetrain
 from tools.price_model import _drivetrain_for
-from tools.scrapers import scrape_cargurus, scrape_carvana, scrape_carscom, scrape_carmax
+from tools.scrapers import scrape_cargurus, scrape_carscom
 from tools.dealer_scraper import scrape_all_dealers
 from tools.job_tracker import start_job, update_job, complete_job
 from tools.price_model import _PLATFORM_MIN_YEAR, _is_cpo
@@ -40,7 +39,6 @@ MAX_YEAR    = datetime.now().year
 _CURR_YEAR  = datetime.now().year
 
 # Sources that require detail-page enrichment to get accident/title data.
-# CarMax and Carvana screen their own inventory — no enrichment needed.
 _ENRICHMENT_REQUIRED = {"cargurus", "carscom"}
 
 # Standard stages — recent inventory, conservative price cap
@@ -181,13 +179,13 @@ def _ts() -> str:
     return datetime.now().strftime("%H:%M:%S")
 
 
-_CPO_SOURCES       = {"carvana", "carmax"}   # inventory focused on CPO/newer cars
+_CPO_SOURCES       = set()   # inventory focused on CPO/newer cars
 _HIGH_MILEAGE_SKIP = 40_000                  # skip CPO sources above this mileage cap
 
 
 def run_stage(desc, min_year, max_mileage, max_price, makes, allowed_norm, vehicles,
               cg_scraped: set | None = None, max_year: int | None = None) -> int:
-    """Run all four scrapers for one stage group.
+    """Run all scrapers for one stage group.
 
     cg_scraped (optional) — mutable set of (eff_min, frozenset(vehicles)) keys for
     CarGurus dedup across stages. CarGurus URL has no mileage/price filter so
@@ -198,8 +196,6 @@ def run_stage(desc, min_year, max_mileage, max_price, makes, allowed_norm, vehic
     scrapers = [
         ("cargurus", scrape_cargurus, {"radius": RADIUS, "max_year": eff_max, "clean_history": True, "local": False, "vehicles": vehicles}),
         ("carscom",  scrape_carscom,  {"radius": RADIUS, "vehicles": vehicles, "clean_history": True, "max_year": eff_max}),
-        ("carvana",  scrape_carvana,  {"vehicles": vehicles, "max_year": eff_max}),
-        ("carmax",   scrape_carmax,   {"radius": RADIUS, "vehicles": vehicles, "max_year": eff_max}),
     ]
     total = 0
     cg_key = (min_year, frozenset(vehicles)) if cg_scraped is not None else None
@@ -212,7 +208,7 @@ def run_stage(desc, min_year, max_mileage, max_price, makes, allowed_norm, vehic
                 continue
             cg_scraped.add(cg_key)
 
-        # CPO sources (Carvana/CarMax) rarely have high-mileage cars — skip to save time
+        # CPO sources rarely have high-mileage cars — skip to save time
         if label in _CPO_SOURCES and max_mileage > _HIGH_MILEAGE_SKIP:
             print(f"    [{_ts()}] {label}: skipped (max_mileage={max_mileage:,} > {_HIGH_MILEAGE_SKIP:,}, CPO source)", flush=True)
             continue

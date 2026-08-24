@@ -10,7 +10,15 @@ from tools.dealer_scraper import (
     _normalize_overfuel,
     _normalize_cosmos_vehicle,
     _normalize_carscommerce,
+    _cpo_urls_for,
 )
+
+def test_cpo_urls_for():
+    urls = _cpo_urls_for("https://www.hennessyauto.com/used-inventory/index.htm")
+    assert "https://www.hennessyauto.com/certified-inventory/index.htm" in urls
+    assert "https://www.hennessyauto.com/certified-pre-owned/" in urls
+    assert "https://www.hennessyauto.com/certified/" in urls
+    assert _cpo_urls_for("https://www.hennessyauto.com/certified-inventory/index.htm") == []
 
 def test_build_dealer_com_url():
     url = "https://www.rickcasehyundai.com/used-inventory/index.htm"

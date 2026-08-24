@@ -63,10 +63,8 @@ def test_is_cpo_insights():
 def test_is_cpo_keywords():
     assert _is_cpo({"trim": "Certified Pre-Owned", "raw": {"text": "some description"}}) is True
     assert _is_cpo({"trim": "SE", "raw": {"text": "This is a CPO vehicle with clean history"}}) is True
-    # CarMax/Carvana certified should be ignored unless explicit CPO keywords present
-    assert _is_cpo({"trim": "SE", "raw": {"text": "CarMax Certified quality check completed"}}) is False
-    assert _is_cpo({"trim": "SE", "raw": {"text": "Carvana Certified vehicle"}}) is False
-    assert _is_cpo({"trim": "SE", "raw": {"text": "Carvana Certified CPO vehicle"}}) is True
+    assert _is_cpo({"trim": "SE", "raw": {"text": "Non-cpo vehicle description"}}) is False
+    assert _is_cpo({"trim": "SE", "raw": {"text": "Certified CPO vehicle"}}) is True
 
 
 def test_to_features_shape_and_values():

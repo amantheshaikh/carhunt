@@ -1,6 +1,6 @@
 # CarHunt
 
-Personal used-car deal tracker for the Atlanta metro area. Scrapes CarGurus, Cars.com, CarMax, Carvana, and local dealer websites for target vehicle configurations, scores each listing with an ML fair-price model, and surfaces the best deals in a Next.js dashboard.
+Personal used-car deal tracker for the Atlanta metro area. Scrapes CarGurus, Cars.com, and local dealer websites for target vehicle configurations, scores each listing with an ML fair-price model, and surfaces the best deals in a Next.js dashboard.
 
 ---
 
@@ -117,7 +117,7 @@ carhunt/
 │   ├── backfill_training.py    # Targeted fix/rescrape of training data for one model
 │   ├── cars.json               # Target vehicles + trim allowlists
 │   └── tools/
-│       ├── scrapers.py         # Playwright scrapers: CarGurus, Cars.com, CarMax, Carvana
+│       ├── scrapers.py         # Playwright scrapers: CarGurus, Cars.com
 │       ├── dealer_scraper.py   # Playwright + API scraper for dealer websites
 │       ├── db.py               # psycopg2 helpers
 │       ├── scoring.py          # score_listing() + drivetrain/powertrain detection

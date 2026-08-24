@@ -2,7 +2,7 @@
 
 CREATE TABLE IF NOT EXISTS listings (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  source TEXT NOT NULL,                  -- 'cargurus' | 'autotrader' | 'carmax' | 'carvana'
+  source TEXT NOT NULL,                  -- 'cargurus' | 'carscom' | 'dealer'
   external_id TEXT NOT NULL,             -- source's own listing ID
   vin TEXT,
   make TEXT NOT NULL,

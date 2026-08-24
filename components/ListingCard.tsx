@@ -106,8 +106,7 @@ export default function ListingCard({ listing: l, selected, onSelect, onAction, 
               </span>
             )}
             <span className="text-zinc-600">{{
-              cargurus: "CarGurus", carscom: "Cars.com", carmax: "CarMax",
-              carvana: "Carvana", dealer: "Dealer",
+              cargurus: "CarGurus", carscom: "Cars.com", dealer: "Dealer",
             }[l.source] ?? l.source.replace("_new", "")}</span>
             <span className="text-zinc-500 font-mono text-xs select-all" title="Listing ID">#{l.id.slice(0, 8)}</span>
           </div>

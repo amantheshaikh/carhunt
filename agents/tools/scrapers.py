@@ -672,8 +672,8 @@ def _focus_listing_text(text: str, limit: int = 2000) -> str:
         # If the span is larger than 2×limit, prefer the last-match anchor
         # (most dealer pages front-load boilerplate before option packages).
         if len(excerpt) > 2 * limit:
-            start = max(0, matches[-1].start() - 400)
-            excerpt = text[start : start + limit]
+            start_anchor = max(0, matches[-1].start() - 400)
+            excerpt = text[start_anchor : start_anchor + limit]
         return excerpt
     return text[:limit]
 
@@ -801,7 +801,7 @@ def enrich_listings_from_detail(listings: list[dict]) -> list[dict]:
         return listings
     enriched: dict[str, dict] = {}
     try:
-        asyncio.run(asyncio.wait_for(_enrich_detail_async(pairs, enriched), timeout=_ENRICH_TIMEOUT))
+        _run(asyncio.wait_for(_enrich_detail_async(pairs, enriched), timeout=_ENRICH_TIMEOUT))
     except asyncio.TimeoutError:
         print(f"  [enrich] session timed out after {_ENRICH_TIMEOUT}s "
               f"— {len(enriched)}/{len(pairs)} fetched, using partial results", flush=True)

@@ -285,7 +285,7 @@ function RefreshBanner({ log, onDone }: { log: RefreshLog | null; onDone: () => 
     return (
       <div className="flex items-center gap-3 px-6 py-2.5 bg-blue-950 border-b border-blue-900 text-blue-200 text-sm">
         <span className="inline-block w-3 h-3 rounded-full bg-blue-400 animate-pulse flex-shrink-0" />
-        <span>Refresh in progress — scraping CarGurus, Cars.com, CarMax, Carvana, and dealer sites. This takes 10–20 minutes.</span>
+        <span>Refresh in progress — scraping CarGurus, Cars.com, and dealer sites. This takes 10–20 minutes.</span>
       </div>
     );
   }

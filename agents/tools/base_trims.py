@@ -242,6 +242,20 @@ def is_trim_allowed_for_training(make: str, model: str, trim: str | None, source
         return True
     return _trim_matches_any(_normalize_trim(trim), allowed)
 
+
+def _match_bmw_token_reorder(norm_trim: str, allowed_trims: list[str]) -> str | None:
+    t_flat = norm_trim.replace(" ", "")
+    for drive in ("xdrive", "sdrive"):
+        if drive in t_flat:
+            num = re.sub(r"[^0-9]", "", t_flat.replace(drive, ""))
+            if not num:
+                continue
+            for allowed in allowed_trims:
+                a_flat = allowed.lower().replace(" ", "").replace("-", "")
+                if a_flat.startswith(drive) and re.sub(r"[^0-9]", "", a_flat) == num:
+                    return allowed
+    return None
+
 def is_trim_allowed(make: str, model: str, trim: str | None) -> bool:
     """Return True if the trim is acceptable for this make/model.
     If no trims allowlist is configured, all trims pass.
@@ -263,14 +277,8 @@ def is_trim_allowed(make: str, model: str, trim: str | None) -> bool:
         return True
 
     # Check for BMW token-reordering (e.g. "30 xDrive" -> xDrive30i)
-    t_flat = t.replace(" ", "")
-    for drive in ("xdrive", "sdrive"):
-        if drive in t_flat:
-            num = re.sub(r"[^0-9]", "", t_flat.replace(drive, ""))
-            for a in allowed:
-                a_flat = a.lower().replace(" ", "").replace("-", "")
-                if a_flat.startswith(drive) and re.sub(r"[^0-9]", "", a_flat) == num:
-                    return True
+    if _match_bmw_token_reorder(t, allowed):
+        return True
     return False
 
 
@@ -369,14 +377,9 @@ def canonical_trim(make: str, model: str, trim: str | None) -> str | None:
             return allowed
     # Pass 2 — BMW token-reorder: "30 xDrive" → "xDrive30i", "xDrive30" → "xDrive30i"
     # Extract drive type and number from input, then match canonical trim with same pair.
-    t_flat = t.replace(" ", "")
-    for drive in ("xdrive", "sdrive"):
-        if drive in t_flat:
-            num = re.sub(r"[^0-9]", "", t_flat.replace(drive, ""))  # e.g. "30" from "30xdrive"
-            for allowed in trims:
-                a_flat = allowed.lower().replace(" ", "").replace("-", "")
-                if a_flat.startswith(drive) and re.sub(r"[^0-9]", "", a_flat) == num:
-                    return allowed
+    bmw_match = _match_bmw_token_reorder(t, trims)
+    if bmw_match:
+        return bmw_match
 
     # Pass 3 — whole-word substring match for formats like "B5 Plus Dark Theme AWD"
     # where the canonical trim name appears as a standalone word anywhere in the string.

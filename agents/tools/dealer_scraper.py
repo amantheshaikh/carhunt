@@ -637,13 +637,12 @@ def _normalize_overfuel(v: dict, brand: str, website_url: str = _OVERFUEL_BASE_U
         return None
     base    = website_url.rstrip("/")
     rel_url = v.get("url", "")
-    photos  = v.get("photos") or []
-    if isinstance(photos, list) and photos and isinstance(photos[0], dict):
-        photo_urls = [p["url"] for p in photos if p.get("url")]
-    elif isinstance(photos, list):
-        photo_urls = [p for p in photos if isinstance(p, str)]
-    else:
-        photo_urls = []
+    photos = v.get("photos") or []
+    photo_urls = [
+        p["url"] if isinstance(p, dict) else p
+        for p in photos
+        if (isinstance(p, dict) and p.get("url")) or isinstance(p, str)
+    ] if isinstance(photos, list) else []
     dealer  = v.get("dealer") or {}
     return _make_listing(
         brand, v.get("vin") or v.get("stocknumber") or rel_url[-20:],
@@ -2060,7 +2059,11 @@ def _cpo_urls_for(inventory_url: str) -> list[str]:
     base = "/".join(inventory_url.split("/")[:3])
     if "certified" in inventory_url.lower():
         return []
-    return [f"{base}/certified-pre-owned/", f"{base}/certified/"]
+    return [
+        f"{base}/certified-inventory/index.htm",
+        f"{base}/certified-pre-owned/",
+        f"{base}/certified/",
+    ]
 
 
 # ---------------------------------------------------------------------------
@@ -2087,36 +2090,14 @@ def scrape_dealer(site: dict, makes: list[str] | None = None,
             if _target_makes and (l.get("make") or "").lower() not in _target_makes:
                 continue
             
-            # Coerce year safely
-            year = l.get("year")
-            if year is not None:
-                try:
-                    if isinstance(year, str):
-                        year = re.sub(r"[^0-9]", "", year)
-                    year = int(year)
-                    l["year"] = year
-                except (ValueError, TypeError):
-                    year = None
-                    l["year"] = None
+            # Coerce year, mileage, and price safely using _int
+            l["year"] = _int(l.get("year"))
+            year = l["year"]
 
-            # Coerce mileage safely
-            mileage = l.get("mileage")
-            if mileage is not None:
-                try:
-                    if isinstance(mileage, str):
-                        mileage = re.sub(r"[^0-9]", "", mileage)
-                    mileage = int(mileage)
-                    l["mileage"] = mileage
-                except (ValueError, TypeError):
-                    l["mileage"] = None
+            l["mileage"] = _int(l.get("mileage"))
 
-            # Coerce price safely — use _int (handles decimals/commas) rather than
-            # stripping all non-digits, which would inflate "29999.00" to 2999900
-            price = l.get("price")
-            if price is not None:
-                coerced = _int(price)
-                l["price"] = coerced
-                price = coerced
+            l["price"] = _int(l.get("price"))
+            price = l["price"]
 
             if year and (year < min_year or (max_year and year > max_year)):
                 continue
@@ -2177,18 +2158,18 @@ def scrape_dealer(site: dict, makes: list[str] | None = None,
                     timeout=150,
                 ))
                 # Probe certified inventory on DDC sites (separate URL path)
-                base = "/".join(site["inventory_url"].split("/")[:3])
-                cpo_url = f"{base}/certified-inventory/index.htm"
-                try:
-                    cpo_listings = _run_with_timeout(
-                        _scrape_cobalt_dom_async(cpo_url, site["brand"], makes, min_year, max_year),
-                        timeout=60,
-                    )
-                    if cpo_listings:
-                        print(f"    CPO: {len(cpo_listings)} listings at /certified-inventory/", flush=True)
-                        _add_used(cpo_listings)
-                except Exception:
-                    pass
+                for cpo_url in _cpo_urls_for(site["inventory_url"]):
+                    try:
+                        cpo_listings = _run_with_timeout(
+                            _scrape_cobalt_dom_async(cpo_url, site["brand"], makes, min_year, max_year),
+                            timeout=60,
+                        )
+                        if cpo_listings:
+                            print(f"    CPO: {len(cpo_listings)} listings at {cpo_url}", flush=True)
+                            _add_used(cpo_listings)
+                            break
+                    except Exception:
+                        pass
             elif cfg.get("type") == "dealerinspire_algolia":
                 _add_used(_scrape_dealerinspire_algolia(
                     cfg["app_id"], cfg["api_key"], cfg["index"], site["brand"],
