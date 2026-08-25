@@ -38,7 +38,7 @@ carhunt/
 | Make | Model | CarGurus ID | Allowed Trims | Year Constraints |
 |---|---|---|---|---|
 | Hyundai | Tucson Hybrid | d3141 | SEL Convenience, N Line, Limited | 2025+ |
-| Genesis | GV70 | d3163 | Advanced, Advanced Plus, Sport Prestige (2.5T only) | 2023–2025 |
+| Genesis | GV70 | d3163 | Standard, Select, Advanced, Advanced Plus, Sport Prestige (2.5T only) | 2023–2025 |
 | Kia | Sportage Hybrid | d3239 | EX, X-Line, SX Prestige | 2023+ |
 | Kia | Sportage PHEV | d3244 | EX, EX Premium, X-Line, X-Line Prestige, SX | 2023–2025 |
 | Volkswagen | Tiguan | d1104 | SE, SEL R-Line, SE R-Line Black | 2025 |
@@ -68,7 +68,7 @@ carhunt/
 - Lexus NX 350h 2022–2024: always AWD. Trim allowlist filters out NX 450h+ variants.
 - Volvo XC40: B4 = FWD, B5 = AWD (detected from trim text). No Recharge electric.
 - Volvo XC60: includes both B5 gas/MHEV (AWD) and Recharge T8 PHEV (eAWD). Stored as separate model names `"XC60"` and `"XC60 Recharge"` in the DB. `detect_powertrain` uses "recharge" keyword to classify PHEV.
-- Genesis GV70: `engine_filter: ["2.5T"]` — shares a CarGurus page with the 3.5T; filter requires "2.5T" in trim. Training trims include Standard/Select for broader depreciation curve.
+- Genesis GV70: `engine_filter: ["2.5T"]` — shares a CarGurus page with the 3.5T; filter requires "2.5T" in trim. All 5 trims (Standard through Sport Prestige) are sourced; training_trims matches.
 - Kia Sportage PHEV: separate model from Sportage Hybrid — different CarGurus ID (d3244), different trim set. Always AWD.
 - Cadillac XT4: sourcing target for 2024–2025 Luxury/Premium Luxury/Sport. Both FWD and AWD variants.
 - Year range in `user_settings` is the global floor; per-model `min_year`/`max_year` in cars.json take precedence.

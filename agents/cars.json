@@ -14,7 +14,7 @@
     {
       "make": "Genesis", "model": "GV70", "cargurus_id": "d3163",
       "cargurus_search_path": "m203/d3163,m203/d3163/2.5T Advanced AWD,m203/d3163/2.5T Sport Prestige AWD",
-      "trims": ["Advanced", "Advanced Plus", "Sport Prestige"],
+      "trims": ["Standard", "Select", "Advanced", "Advanced Plus", "Sport Prestige"],
       "training_trims": ["Standard", "Select", "Advanced", "Advanced Plus", "Sport Prestige"],
       "engine_filter": ["2.5T"],
       "min_year": 2023, "max_year": 2025,
