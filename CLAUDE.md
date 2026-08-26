@@ -27,6 +27,7 @@ carhunt/
 │       ├── scoring.py        # score_listing() + detect_drivetrain/powertrain
 │       ├── price_model.py    # Stacked ensemble fair-price estimator (GB + KNN + Ridge)
 │       ├── base_trims.py     # Vehicle config loader, canonical_trim, LLM trim fallback
+│       ├── vin_decoder.py    # NHTSA vPIC VIN decoder for trim enrichment on dealer listings
 │       ├── log_tee.py        # Shared stdout/stderr tee → /tmp/carhunt-refresh.log
 │       └── job_tracker.py    # Job progress tracking for dashboard SSE stream
 ```
@@ -265,7 +266,8 @@ Type `/retrain` in Claude Code to run a broad market sweep and retrain the model
 | `agents/tools/base_trims.py` | Trim normalization, LLM fallback, `_CANONICAL_NAMES`, `normalize_listing_model()` |
 | `agents/tools/log_tee.py` | Dashboard log file path, tee behavior |
 | `agents/sourcing_agent.py` | Validation rules, fingerprint dedup, scraping flow |
-| `agents/tools/dealer_scraper.py` | Dealer scraping strategies, per-site timeouts |
+| `agents/tools/dealer_scraper.py` | Dealer scraping strategies, per-site timeouts, cobalt_dom JSON-LD fallback |
+| `agents/tools/vin_decoder.py` | NHTSA VIN decoder — trim allowlist, cache size |
 | `agents/orchestrator.py` | Phase timeouts (training: 5 min, scoring: 5 min, watchdog: 60 min) |
 | `components/ListingCard.tsx` | What's shown on each card |
 | `components/ListingDetail.tsx` | Detail panel — SHAP waterfall, score display |
@@ -391,6 +393,9 @@ PROXY_URL=...                   # optional: http://user:pass@host:port for resid
 - **cobalt_dom pagination:** `_scrape_cobalt_dom_async` tracks `seen_ext_ids` (VIN or href-derived) across pages and breaks immediately when a page yields no new listings. This prevents an infinite loop on DDC sites whose `?start=N` param is silently ignored (e.g. Volvo dealers that redirect to a fixed URL).
 - **cobalt_dom soft time limit:** `_t0` is set before browser launch (line ~280) so the 100s soft limit is measured from total wall time including browser setup. This ensures ≥50s remains for `browser.close()` within the `asyncio.wait_for(timeout=150)` budget — preventing a race where close() gets cancelled and partial results are lost.
 - **cobalt_dom title prefix:** `li.vehicle-card` body text may read "Used 2025 Hyundai..." — the JS evaluate block strips "Used|Pre-Owned|Certified|New" prefixes before the year-pattern match so titles are correctly parsed.
+- **cobalt_dom JSON-LD fallback:** DDC sites like Dyer & Dyer embed full inventory in `<script type="application/ld+json">` structured data, but only render `.price-value` DOM elements for a subset of cards (transparent-pricing sites show the fee-inclusive "Transparent Price" in structured data, not the base vehicle price in the DOM). Before the card loop, a recursive `_jldFind()` JS function builds a VIN→{price, mileage, url} map from all JSON-LD blocks on the page. When a card lacks a DOM price, the JSON-LD entry for that VIN is used as fallback. JSON-LD prices on transparent-pricing sites include dealer fees (~$1–2k above base); this is acceptable since it's within the model's MAE. Prices are parsed via `Math.round(parseFloat(...))` to avoid turning float strings like `"29195.0"` into `"2919500"`.
+- **VIN extraction (cobalt_dom):** VINs are extracted from `[data-vin]` attributes, `li.vin` text content (DDC sites), or ipacket.info link hrefs — in that priority order.
+- **NHTSA VIN decoder (`tools/vin_decoder.py`):** Free NHTSA vPIC API (`/api/vehicles/decodevin/{VIN}?format=json`) decodes trim, make, model, year, and drive_type from the VIN encoding. Validates that the VIN is exactly 17 chars and matches `[A-HJ-NPR-Z0-9]{17}` before making any HTTP call. Results cached in a module-level dict (treat returned dict as read-only). Called in `sourcing_agent._enrich_trim_from_vin()` as a pre-pass before Pass 1 validation for dealer listings: when a listing has a VIN but its trim is missing or fails `is_trim_allowed`, NHTSA is queried, the result is run through `canonical_trim()`, and accepted if it passes the allowlist. Training data does not store VINs; NHTSA enrichment applies only to active sourcing.
 - **`_build_dealer_com_url`** only modifies URLs that contain BOTH `index.htm` AND a CDK path (`/used-inventory/`, `/new-inventory/`, etc.). DealerInspire URLs (`/used-vehicles/`) have neither — they pass through unmodified.
 - **Orchestrator timeouts:** 60-minute watchdog; 5-minute cap per training phase; 5-minute cap per scoring phase.
 - **Anti-detection:** Browser UA rotates across Chrome 134–136 (macOS + Windows). Viewport randomizes across 5 sizes. Bot-detection check after each CarGurus/Cars.com page load.

@@ -319,9 +319,12 @@ async def _scrape_cobalt_dom_async(inventory_url: str, brand: str,
                             for (const v of _jldFind(JSON.parse(s.textContent), 0)) {
                                 const vin = v.vehicleIdentificationNumber;
                                 if (!vin) continue;
+                                // Parse as float first to avoid turning "29195.0" into "2919500"
+                                const rawPrice = v.offers?.price;
+                                const rawMiles = v.mileageFromOdometer?.value;
                                 jldMap[vin] = {
-                                    price: v.offers?.price != null ? String(v.offers.price).replace(/[^0-9]/g, '') || null : null,
-                                    mileage: v.mileageFromOdometer?.value != null ? String(v.mileageFromOdometer.value).replace(/[^0-9]/g, '') || null : null,
+                                    price: rawPrice != null ? String(Math.round(parseFloat(rawPrice))) || null : null,
+                                    mileage: rawMiles != null ? String(Math.round(parseFloat(rawMiles))) || null : null,
                                     url: v.url || ''
                                 };
                             }

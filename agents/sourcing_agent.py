@@ -214,7 +214,7 @@ def _enrich_trim_from_vin(listing: dict) -> None:
     """If a listing has a VIN but its trim is missing or not in our allowlist,
     query the NHTSA vPIC API to resolve the trim from the VIN encoding itself."""
     vin = listing.get("vin")
-    if not vin:
+    if not vin or len(vin) != 17:
         return
     make  = listing.get("make", "")
     model = listing.get("model", "")
