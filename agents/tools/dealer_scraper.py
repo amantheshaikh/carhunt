@@ -310,9 +310,12 @@ async def _scrape_cobalt_dom_async(inventory_url: str, brand: str,
                             .map(l => l.replace(/^(Used|Pre-Owned|Certified Pre-Owned|Certified|New)\\s+/i, ''))
                             .find(l => /^\\d{4}\\s+[A-Z]/.test(l)) || '';
 
-                        // VIN from roadster button or any data-vin attr
+                        // VIN from data-vin attr, li.vin text (DDC sites like Dyer & Dyer), or ipacket link
                         const vinEl = card.querySelector('[data-vin]');
-                        const vin = vinEl?.getAttribute('data-vin') || null;
+                        const vinLiText = card.querySelector('li.vin')?.textContent?.trim().replace(/^VIN:\s*/i, '') || null;
+                        const ipacketHref = card.querySelector('a[href*="ipacket.info/"]')?.href || '';
+                        const ipacketVin = ipacketHref.match(/ipacket\.info\/([A-HJ-NPR-Z0-9]{17})/i)?.[1] || null;
+                        const vin = vinEl?.getAttribute('data-vin') || vinLiText || ipacketVin || null;
 
                         // Mileage
                         const mileageM = bodyText.match(/([\\d,]+)\\s*miles?/i);
