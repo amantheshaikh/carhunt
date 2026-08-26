@@ -31,6 +31,7 @@ from tools.scrapers import (
 )
 from tools.dealer_scraper import scrape_all_dealers
 from tools.base_trims import get_allowed_makes, get_allowed_models, get_vehicles, is_trim_allowed, get_model_min_year, get_model_max_year, get_trim_min_year, get_trim_max_year, trim_belongs_to_different_model, canonical_trim, _norm, normalize_listing_model
+from tools.vin_decoder import decode_vin
 
 # Skip a source if it was successfully scraped within this many hours
 MIN_HOURS_BETWEEN_RUNS = 6
@@ -209,6 +210,27 @@ def _is_valid(listing: dict, min_year: int, allowed_makes: list[str],
     return True
 
 
+def _enrich_trim_from_vin(listing: dict) -> None:
+    """If a listing has a VIN but its trim is missing or not in our allowlist,
+    query the NHTSA vPIC API to resolve the trim from the VIN encoding itself."""
+    vin = listing.get("vin")
+    if not vin:
+        return
+    make  = listing.get("make", "")
+    model = listing.get("model", "")
+    trim  = listing.get("trim")
+    if is_trim_allowed(make, model, trim):
+        return  # trim already valid — no lookup needed
+    decoded = decode_vin(vin)
+    nhtsa_trim = decoded.get("trim")
+    if not nhtsa_trim:
+        return
+    canon = canonical_trim(make, model, nhtsa_trim)
+    if is_trim_allowed(make, model, canon):
+        print(f"    [vin_decoder] {vin}: trim {trim!r} → {canon!r} (from NHTSA)", flush=True)
+        listing["trim"] = canon
+
+
 def _save_new(listing: dict) -> None:
     mk, mo = normalize_listing_model(listing["make"], listing["model"], listing.get("trim"))
     trim = canonical_trim(mk, mo, listing.get("trim"))
@@ -350,6 +372,12 @@ def process_source(
     updated_count = 0
     skipped_count = 0
     enrichment_failed = 0
+
+    # Pre-pass: VIN-decode trim for dealer listings missing a valid trim.
+    # NHTSA lookup is cached per-VIN, so duplicate calls within a run are free.
+    if source == "dealer":
+        for listing in listings:
+            _enrich_trim_from_vin(listing)
 
     # Pass 1: identify candidates (passes validation + dedup checks)
     candidates = []
