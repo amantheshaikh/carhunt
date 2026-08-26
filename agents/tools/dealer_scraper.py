@@ -66,20 +66,16 @@ def _build_dealer_com_url(inventory_url: str, makes: list[str] | None, min_year:
     parsed = urlparse(inventory_url)
     params = parse_qs(parsed.query)
     
-    # Clean up parameters we are going to supply ourselves
+    # Strip any pre-existing filter params we manage (year stripped to avoid DDC SSR breakage)
     for key in ["make", "model", "year", "start", "pageNum"]:
         params.pop(key, None)
         
-    # Build our parameters — filter by make only (model names in cars.json often don't match
-    # Dealer.com model names, e.g. "NX 350h" vs "NX", causing false-zero results)
+    # Filter by make only. Model names often don't match Dealer.com names (e.g. "NX 350h" vs "NX").
+    # Year params intentionally omitted: DDC SSR breaks with multiple year= values
+    # (2+ years → 0 li.vehicle-card rendered). Year filtering handled by _add_used instead.
     if makes:
         params["make"] = list(makes)
 
-    # Year filter — Dealer.com expects individual year values, not a range string
-    if min_year:
-        max_yr = max_year or datetime.now().year + 2
-        params["year"] = [str(y) for y in range(min_year, max_yr + 1)]
-        
     # Reconstruct URL
     query_str = urlencode(params, doseq=True)
     sep = "?" if query_str else ""
