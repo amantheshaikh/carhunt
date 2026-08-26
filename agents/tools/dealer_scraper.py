@@ -300,6 +300,34 @@ async def _scrape_cobalt_dom_async(inventory_url: str, brand: str,
                     await _scroll_progressive(page)
 
                 cards_data = await page.evaluate("""() => {
+                    // Build JSON-LD vehicle map (VIN → {price, mileage, url}).
+                    // DDC sites like Dyer & Dyer embed full inventory in structured data while
+                    // .price-value DOM elements only render for a subset of cards.
+                    function _jldFind(obj, depth) {
+                        if (!obj || typeof obj !== 'object' || depth > 10) return [];
+                        if (obj.vehicleIdentificationNumber) return [obj];
+                        const acc = [];
+                        for (const v of Object.values(obj)) {
+                            if (Array.isArray(v)) { for (const x of v) acc.push(..._jldFind(x, depth + 1)); }
+                            else if (typeof v === 'object') acc.push(..._jldFind(v, depth + 1));
+                        }
+                        return acc;
+                    }
+                    const jldMap = {};
+                    for (const s of document.querySelectorAll('script[type="application/ld+json"]')) {
+                        try {
+                            for (const v of _jldFind(JSON.parse(s.textContent), 0)) {
+                                const vin = v.vehicleIdentificationNumber;
+                                if (!vin) continue;
+                                jldMap[vin] = {
+                                    price: v.offers?.price != null ? String(v.offers.price).replace(/[^0-9]/g, '') || null : null,
+                                    mileage: v.mileageFromOdometer?.value != null ? String(v.mileageFromOdometer.value).replace(/[^0-9]/g, '') || null : null,
+                                    url: v.url || ''
+                                };
+                            }
+                        } catch(e) {}
+                    }
+
                     const cards = [...document.querySelectorAll('li.vehicle-card')];
                     return cards.map(card => {
                         // Title: first line matching "YYYY Make ..." pattern
@@ -312,25 +340,28 @@ async def _scrape_cobalt_dom_async(inventory_url: str, brand: str,
 
                         // VIN from data-vin attr, li.vin text (DDC sites like Dyer & Dyer), or ipacket link
                         const vinEl = card.querySelector('[data-vin]');
-                        const vinLiText = card.querySelector('li.vin')?.textContent?.trim().replace(/^VIN:\s*/i, '') || null;
+                        const vinLiText = card.querySelector('li.vin')?.textContent?.trim().replace(/^VIN:\\s*/i, '') || null;
                         const ipacketHref = card.querySelector('a[href*="ipacket.info/"]')?.href || '';
-                        const ipacketVin = ipacketHref.match(/ipacket\.info\/([A-HJ-NPR-Z0-9]{17})/i)?.[1] || null;
+                        const ipacketVin = ipacketHref.match(/ipacket\\.info\\/([A-HJ-NPR-Z0-9]{17})/i)?.[1] || null;
                         const vin = vinEl?.getAttribute('data-vin') || vinLiText || ipacketVin || null;
 
-                        // Mileage
-                        const mileageM = bodyText.match(/([\\d,]+)\\s*miles?/i);
-                        const mileage = mileageM ? mileageM[1].replace(/,/g, '') : null;
+                        // JSON-LD fallback entry for this VIN (price may include dealer fees on transparent-price sites)
+                        const jld = vin ? (jldMap[vin] || null) : null;
 
-                        // Sale Price: first .price-value span (advertised price before fees)
+                        // Mileage: DOM text first, then JSON-LD
+                        const mileageM = bodyText.match(/([\\d,]+)\\s*miles?/i);
+                        const mileage = mileageM ? mileageM[1].replace(/,/g, '') : (jld?.mileage || null);
+
+                        // Sale Price: DOM .price-value first (base price before fees), then JSON-LD fallback
                         const priceEl = card.querySelector('.price-value');
                         const priceText = priceEl?.innerText?.trim() || '';
                         const priceM = priceText.match(/[\\d,]+/);
-                        const price = priceM ? priceM[0].replace(/,/g, '') : null;
+                        const price = priceM ? priceM[0].replace(/,/g, '') : (jld?.price || null);
 
                         // Detail URL
                         const linkEl = card.querySelector('a[href*="/used/"],a[href*="/certified/"],a[href*="/pre-owned/"]')
                             || card.querySelector('a[href$=".htm"]');
-                        const href = linkEl?.href || '';
+                        const href = linkEl?.href || jld?.url || '';
 
                         const isCpo = href.includes('/certified') ||
                             bodyText.toLowerCase().includes('certified pre-owned');
