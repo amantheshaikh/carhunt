@@ -266,7 +266,7 @@ Type `/retrain` in Claude Code to run a broad market sweep and retrain the model
 | `agents/tools/base_trims.py` | Trim normalization, LLM fallback, `_CANONICAL_NAMES`, `normalize_listing_model()` |
 | `agents/tools/log_tee.py` | Dashboard log file path, tee behavior |
 | `agents/sourcing_agent.py` | Validation rules, fingerprint dedup, scraping flow |
-| `agents/tools/dealer_scraper.py` | Dealer scraping strategies, per-site timeouts, cobalt_dom JSON-LD fallback |
+| `agents/tools/dealer_scraper.py` | Dealer scraping strategies, per-site timeouts, cobalt_dom JSON-LD fallback, llm_extract |
 | `agents/tools/vin_decoder.py` | NHTSA VIN decoder — trim allowlist, cache size |
 | `agents/orchestrator.py` | Phase timeouts (training: 5 min, scoring: 5 min, watchdog: 60 min) |
 | `components/ListingCard.tsx` | What's shown on each card |
@@ -376,6 +376,8 @@ PROXY_URL=...                   # optional: http://user:pass@host:port for resid
 
 **Adding an Audi One dealer:** set `scraper_config = {"type": "audi_one"}` and `inventory_url = "https://www.audi{dealer}.com/en/inventory/used/"`. The scraper handles "Load more vehicles" pagination and extracts VIN, year/make/model from `[data-testid="model-name"]`, trim from `[data-testid="trim-name"]`, and mileage/price from card text.
 
+**Adding a universal LLM-guided dealer:** set `scraper_config = {"type": "llm_extract"}` for any dealer site that resists structured scraping. The scraper loads the page with Playwright, extracts vehicle card text via a multi-pass selector strategy (explicit card selectors → `[data-vin]` parent-walk requiring year+price+mileage → body text fallback), then calls `deepseek/deepseek-v4-flash` (~$0.001/page) to parse structured JSON. Paginates via detected next-page links. Make+year filtering is applied at the LLM level; model/trim filtering happens downstream in `_is_valid`. Use 300s timeout. Best suited for sites with < 15 pages or where URL-level make filtering is available. Note: slower than API-based scrapers (~40s/page vs. ~2s for API).
+
 ---
 
 ## Development Notes
@@ -388,6 +390,7 @@ PROXY_URL=...                   # optional: http://user:pass@host:port for resid
 - **Canonical trim normalization** — 4-pass (prefix → BMW token-reorder → whole-word substring → LLM). Engine prefix regex strips "350h ", "2.0T " etc. before matching. To prevent ingestion failures, `is_trim_allowed` also supports Pass 2 (BMW token-reorder).
 - **Title parsing LLM fallback** — `_parse_title` in `dealer_scraper.py` falls back to a cached LLM title parser (`deepseek-v4-flash` via OpenRouter) when standard regex/substring matching fails to resolve a valid make/model. Cache stored in `.title_cache.json`. Uses a strict prompt format (`{"matched": false}`) to prevent force-mapping non-target vehicles. `_llm_model_valid_for_title()` post-validates every LLM result: (1) if the matched model has a powertrain qualifier (Hybrid/PHEV/Recharge), the source title must contain one too; (2) all non-powertrain words in the model name must appear in the title. This prevents cross-variant false positives (e.g. "Elantra Hybrid" title → "Tucson Hybrid" match).
 - **Dealer scraping is parallelized** — 5 sites concurrently via `ThreadPoolExecutor(max_workers=5)`. `cobalt` (XHR-intercept) and `audi_one` sites have 150s timeout; others 90s.
+- **`llm_extract` scraper** — LLM-guided universal extractor for sites that resist DOM/API strategies. Card extraction uses a 3-pass JS approach: (1) explicit card-level CSS selectors, (2) `[data-vin]` parent-walk requiring the ancestor to contain year-pattern + price + mileage text, (3) body-text fallback. Uses `innerText` not `outerHTML` for compactness. LLM prompt filters by make + year; model/trim gating handled by `_is_valid` downstream. Pagination via `_NEXT_PAGE_JS` next-link detection. LLM: `deepseek/deepseek-v4-flash` at ~$0.001/page. Timeout: 300s in dispatcher.
 - **`_add_used` coerce** uses `_int()` for price/mileage/year — handles decimal strings via `int(float(...))` to avoid stripping the decimal point into a 100x inflated value.
 - **dealerinspire_algolia:** All `dealerinspire_algolia` entries have been deactivated — app_ids are deprovisioned or belong to non-target brands (Mazda/Toyota). The type still exists in the dispatcher for future use if a live Algolia index is found.
 - **cobalt_dom pagination:** `_scrape_cobalt_dom_async` tracks `seen_ext_ids` (VIN or href-derived) across pages and breaks immediately when a page yields no new listings. This prevents an infinite loop on DDC sites whose `?start=N` param is silently ignored (e.g. Volvo dealers that redirect to a fixed URL).

@@ -2090,6 +2090,212 @@ def _parse_ais_item(item: dict, brand: str, base_url: str) -> dict | None:
     )
 
 
+# ---------------------------------------------------------------------------
+# LLM-guided universal inventory extractor  (scraper_config type: "llm_extract")
+# ---------------------------------------------------------------------------
+
+_LLM_EXTRACT_MODEL = "deepseek/deepseek-v4-flash"  # ~$0.001/dealer/run via OpenRouter
+
+# JS: extract vehicle listing text from the page, falling back to full body text.
+# Uses innerText (not outerHTML) for compactness so prices/mileage fit within the LLM context slice.
+# Cards are capped at 20 (×800 chars each) → max ~16k chars of card content.
+_CARD_EXTRACT_JS = """() => {
+    function cardText(el) {
+        const vin = el.getAttribute && (el.getAttribute('data-vin') || el.getAttribute('data-vehicle-vin') || '');
+        const prefix = vin ? `[vin=${vin}] ` : '';
+        return (prefix + (el.innerText || '').trim()).substring(0, 800);
+    }
+
+    // Pass 1: explicit card-level selectors (known to be full card containers)
+    const EXACT = [
+        'li.vehicle-card', '.inventory-vehicle', '.result-item', '.vehicle-card',
+        '.inventory-card', '.listing-item', '[class*="VehicleCard"]', '[class*="listing-card"]',
+        '[data-testid="vehicle-card"]', '[data-testid*="srp-listing"]', '[data-vehicle]',
+    ];
+    for (const sel of EXACT) {
+        const cards = document.querySelectorAll(sel);
+        if (cards.length >= 3)
+            return { sel, cards: Array.from(cards).slice(0, 20).map(cardText) };
+    }
+
+    // Pass 2: find [data-vin] elements and walk up to the ancestor that contains price + mileage
+    const vinEls = Array.from(document.querySelectorAll('[data-vin], [data-vehicle-vin]'));
+    if (vinEls.length >= 3) {
+        const seen = new Set();
+        const cards = [];
+        for (const el of vinEls) {
+            const vin = el.getAttribute('data-vin') || el.getAttribute('data-vehicle-vin') || '';
+            if (!vin || seen.has(vin)) continue;
+            let node = el;
+            while (node && node !== document.body) {
+                const txt = node.innerText || '';
+                const hasPrice = /\\$[\\d,]+|retail price|sale price/i.test(txt);
+                const hasMiles = /[\\d,]+ miles?|miles:\\s*[\\d,]+|mileage/i.test(txt);
+                const hasTitle = /20\\d{2}\\s+[A-Z]/i.test(txt);
+                if (hasPrice && hasMiles && hasTitle) {
+                    const make = el.getAttribute('data-make') || '';
+                    const year = el.getAttribute('data-year') || '';
+                    cards.push(`[vin=${vin}${make?' make='+make:''}${year?' year='+year:''}]\n${txt}`.substring(0, 800));
+                    seen.add(vin);
+                    break;
+                }
+                node = node.parentElement;
+            }
+            if (cards.length >= 20) break;
+        }
+        if (cards.length >= 3) return { sel: '[data-vin]→text', cards };
+    }
+
+    return { sel: null, cards: [], fallback: document.body.innerText.substring(0, 12000) };
+}"""
+
+# JS: find the next-page URL from common pagination patterns
+_NEXT_PAGE_JS = """() => {
+    for (const sel of [
+        'a[aria-label*="Next page"]', 'a[aria-label*="next page"]',
+        'a[aria-label="Next"]', 'a[rel="next"]',
+        'a.next-page', 'a.pagination__next', 'li.next > a', '.pager-next a',
+    ]) {
+        const el = document.querySelector(sel);
+        if (el?.href && el.href !== window.location.href) return el.href;
+    }
+    for (const a of document.querySelectorAll('a[href]')) {
+        const t = a.textContent.trim();
+        if ((t === 'Next' || t === '›' || t === '»' || t === 'Next Page') && a.href) return a.href;
+    }
+    return null;
+}"""
+
+
+async def _scrape_llm_extract_async(inventory_url: str, brand: str,
+                                     makes: list[str] | None = None,
+                                     min_year: int = 0, max_year: int | None = None) -> list[dict]:
+    """LLM-guided universal inventory extractor for dealer sites that resist structured scraping.
+
+    Loads pages with stealth Playwright, extracts vehicle card HTML snippets, and calls
+    DeepSeek V3 via OpenRouter to parse structured vehicle data from any layout.
+    Follows next-page links up to 12 pages.
+    """
+    from tools.base_trims import get_llm_client
+    client = get_llm_client()
+    if client is None:
+        print("    [llm_extract] no OPENROUTER_API_KEY — skipping", flush=True)
+        return []
+
+    makes_str = ", ".join(makes) if makes else "any make"
+    year_filter = f">= {min_year}" + (f" and <= {max_year}" if max_year else "")
+    base_url = "/".join(inventory_url.split("/")[:3])
+    all_listings: list[dict] = []
+    seen_vins: set[str] = set()
+
+    async with Stealth().use_async(async_playwright()) as p:
+        browser, ctx = await _stealth_browser(p)
+        page = await ctx.new_page()
+
+        current_url = _build_dealer_com_url(inventory_url, makes, min_year, max_year)
+        current_url = _build_dealeron_url(current_url, makes, min_year, max_year)
+        page_num = 0
+
+        try:
+            while current_url and page_num < 20:
+                page_num += 1
+                try:
+                    await page.goto(current_url, wait_until="domcontentloaded", timeout=30_000)
+                    await page.wait_for_timeout(2_500)
+                except Exception as e:
+                    print(f"    [llm_extract] nav error p{page_num}: {e}", flush=True)
+                    break
+
+                # Scroll to trigger lazy loading
+                for _ in range(4):
+                    await page.evaluate("window.scrollBy(0, window.innerHeight)")
+                    await page.wait_for_timeout(500)
+                await page.evaluate("window.scrollTo(0, 0)")
+
+                card_data = await page.evaluate(_CARD_EXTRACT_JS)
+                next_url = await page.evaluate(_NEXT_PAGE_JS)
+
+                cards = card_data.get("cards") or []
+                if cards:
+                    content = "\n---CARD---\n".join(cards)
+                    ctx_desc = f"{len(cards)} cards ({card_data['sel']})"
+                else:
+                    content = card_data.get("fallback", "")
+                    ctx_desc = "full page text"
+                print(f"    [llm_extract] p{page_num}: {ctx_desc}", flush=True)
+
+                if not content.strip():
+                    break
+
+                prompt = (
+                    "Extract used vehicle listings from this dealer inventory page.\n"
+                    'Return JSON: {"listings": [...]} where each item has:\n'
+                    "  vin (17-char string or null), year (int), make (string), model (string),\n"
+                    "  trim (string or null), price (int USD no $ or commas), mileage (int miles),\n"
+                    "  url (detail page href — look in href= attributes)\n\n"
+                    f"FILTER: only include used/pre-owned/certified vehicles where:\n"
+                    f"  make is one of [{makes_str}]\n"
+                    f"  year {year_filter}\n"
+                    "VINs are often in data-vin, data-vehiclevin attributes or URL paths — check HTML attributes.\n\n"
+                    f"Content:\n{content[:12000]}"
+                )
+
+                try:
+                    resp = client.chat.completions.create(
+                        model=_LLM_EXTRACT_MODEL,
+                        messages=[{"role": "user", "content": prompt}],
+                        temperature=0,
+                        max_tokens=3000,
+                        response_format={"type": "json_object"},
+                    )
+                    page_items = json.loads(resp.choices[0].message.content or "{}").get("listings") or []
+                except Exception as e:
+                    print(f"    [llm_extract] LLM error p{page_num}: {e}", flush=True)
+                    break
+
+                new_count = 0
+                for v in page_items:
+                    if not isinstance(v, dict):
+                        continue
+                    vin = (str(v.get("vin") or "").strip().upper() or None)
+                    if vin and len(vin) != 17:
+                        vin = None
+                    if vin and vin in seen_vins:
+                        continue
+                    if vin:
+                        seen_vins.add(vin)
+
+                    listing_url = str(v.get("url") or "").strip()
+                    if listing_url and not listing_url.startswith("http"):
+                        listing_url = base_url + ("" if listing_url.startswith("/") else "/") + listing_url
+                    listing_url = listing_url or current_url
+
+                    ext_key = vin or re.sub(r"[^a-z0-9]", "", listing_url.lower())[-20:]
+                    all_listings.append(_make_listing(
+                        brand, ext_key,
+                        vin=vin,
+                        make=str(v.get("make") or "").strip(),
+                        model=str(v.get("model") or "").strip(),
+                        trim=str(v.get("trim") or "").strip() or None,
+                        year=v.get("year"),
+                        body_type=None,
+                        mileage=v.get("mileage"),
+                        price=v.get("price"),
+                        listing_url=listing_url,
+                        photos_url=[],
+                        dealer_name=brand,
+                    ))
+                    new_count += 1
+
+                print(f"    [llm_extract] p{page_num}: {new_count} new (total {len(all_listings)})", flush=True)
+                current_url = next_url  # None → loop exits via while condition
+
+        finally:
+            await browser.close()
+
+    return all_listings
+
+
 def _cpo_urls_for(inventory_url: str) -> list[str]:
     """Return CPO URL candidates for sites that split CPO onto a separate page.
     Not used for API-based scrapers (they already include CPO in their queries)."""
@@ -2245,6 +2451,12 @@ def scrape_dealer(site: dict, makes: list[str] | None = None,
                     _scrape_audi_one_async(site["inventory_url"], site["brand"],
                                            makes=makes, min_year=min_year, max_year=max_year),
                     timeout=150,
+                ))
+            elif cfg.get("type") == "llm_extract":
+                _add_used(_run_with_timeout(
+                    _scrape_llm_extract_async(site["inventory_url"], site["brand"],
+                                              makes=makes, min_year=min_year, max_year=max_year),
+                    timeout=300,
                 ))
             else:
                 _add_used(_run_with_timeout(
