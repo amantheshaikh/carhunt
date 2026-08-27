@@ -1900,15 +1900,18 @@ _TITLE_PREFIXES = re.compile(
 
 _POWERTRAIN_QUALIFIERS = re.compile(r"\b(hybrid|phev|recharge|electric|plug.in|eawd)\b", re.IGNORECASE)
 _POWERTRAIN_WORDS = {"hybrid", "phev", "recharge", "electric", "plug-in", "eawd", "350h", "400h", "500h"}
+_H_SUFFIX = re.compile(r"\b(\d{3,4}h)\b", re.IGNORECASE)
 
 def _llm_model_valid_for_title(model: str, title: str) -> bool:
     """Validate an LLM-matched model against the original title.
 
-    Two checks:
+    Three checks:
     1. If the model has a powertrain qualifier (Hybrid, PHEV, Recharge), the title must too —
        prevents 'Tucson Hybrid' matching a plain 'Tucson'.
     2. All non-powertrain words in the model name must appear in the title —
        prevents 'Tucson Hybrid' matching 'Elantra Hybrid', or 'GV70' matching 'GV80'.
+    3. h-suffix designations (350h, 450h, etc.) must agree if both have one —
+       prevents 'NX 350h' matching an 'NX 450h+' title.
     """
     model_lower = model.lower()
     title_lower = title.lower()
@@ -1919,7 +1922,16 @@ def _llm_model_valid_for_title(model: str, title: str) -> bool:
 
     # Check 2: each non-powertrain word in the model name must appear in the title
     model_words = [w for w in re.split(r"[\s\-]+", model_lower) if w not in _POWERTRAIN_WORDS and len(w) > 1]
-    return all(w in title_lower for w in model_words)
+    if not all(w in title_lower for w in model_words):
+        return False
+
+    # Check 3: model-specific h-suffixes (350h, 450h, 400h) must not disagree
+    model_h = {m.group(1).lower() for m in _H_SUFFIX.finditer(model)}
+    title_h  = {m.group(1).lower() for m in _H_SUFFIX.finditer(title)}
+    if model_h and title_h and model_h.isdisjoint(title_h):
+        return False
+
+    return True
 
 
 def _parse_title(title: str) -> tuple[str, str, str, str]:
