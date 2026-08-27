@@ -287,7 +287,11 @@ async def _scrape_cobalt_dom_async(inventory_url: str, brand: str,
             while True:
                 parsed = urlparse(filtered_url)
                 params = parse_qs(parsed.query, keep_blank_values=True)
-                params["start"] = [str(start)]
+                # Omit start=0 on first page — DDC SSR breaks with start=0 just like multiple year= params
+                if start > 0:
+                    params["start"] = [str(start)]
+                else:
+                    params.pop("start", None)
                 page_url = f"{parsed.scheme}://{parsed.netloc}{parsed.path}?{urlencode(params, doseq=True)}"
 
                 await page.goto(page_url, wait_until="domcontentloaded", timeout=30_000)
