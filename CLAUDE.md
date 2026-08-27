@@ -384,7 +384,7 @@ PROXY_URL=...                   # optional: http://user:pass@host:port for resid
 
 - **Status system:** `new` → `active` → `contacted` → `purchased`. `dismissed` = user-removed. Listings are **never** auto-dismissed by score or missed scrapes.
 - **No auto-sold:** Scraper never marks listings as sold. User controls this via "Mark Expired".
-- **Mileage validation is rate-based:** `mileage / years_old > 14,000` → reject. Hard ceiling (`max_mileage`) set to 999999 in `run()` so no cap at the scraper URL level.
+- **Mileage validation:** Two gates — (1) hard cap: `mileage > 50,000` → reject (all conditions incl. CPO); (2) rate check: `mileage / years_old > 14,000` → reject for non-CPO (rental/fleet heuristic). `max_mileage=50_000` in `run()`; rate check is CPO-exempt.
 - **Detail-page enrichment** runs concurrently (3 pages at a time) with a 10-minute total session cap. CarGurus and Cars.com require enrichment for history parsing, while dealer sites optionally run enrichment for qualitative insights. LLM insight extraction runs in a background thread per listing (timeout=15s).
 - **CarGurus new search format** uses `data-testid="srp-listing-tile"` DOM elements; `_dismiss_cargurus_modal()` handles the "Only show GA listings?" modal.
 - **Canonical trim normalization** — 4-pass (prefix → BMW token-reorder → whole-word substring → LLM). Engine prefix regex strips "350h ", "2.0T " etc. before matching. To prevent ingestion failures, `is_trim_allowed` also supports Pass 2 (BMW token-reorder).

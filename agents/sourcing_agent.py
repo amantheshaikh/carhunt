@@ -171,6 +171,8 @@ def _is_valid(listing: dict, min_year: int, allowed_makes: list[str],
                 if state_m.group(1) != "GA":
                     return False
     mileage = listing.get("mileage")
+    if max_mileage and mileage is not None and mileage > max_mileage:
+        return False
     if listing.get("condition", "used") == "used":
         # Reject rental/fleet usage: >14k miles/year indicates commercial use
         if mileage is not None and year is not None:
@@ -488,8 +490,7 @@ def run(run_id: str = "", force: bool = False) -> dict:
     allowed_models = get_allowed_models()
     vehicles       = get_vehicles()          # [(make, model)] for targeted model filtering
     max_price      = settings.get("max_price", 35000)
-    # Set max_mileage to 999999 to disable hard mileage ceiling (rely on mileage-per-year/rental check)
-    max_mileage    = 999999
+    max_mileage    = 50_000  # hard ceiling applied in _is_valid for all conditions
     min_year       = settings.get("min_year", 2025)
     max_year       = settings.get("max_year", 2026)
     # Lower the scrape floor if any model has an earlier per-model min_year.

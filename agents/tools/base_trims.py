@@ -5,7 +5,6 @@ import json
 import os
 import re
 import sys
-from typing import Optional
 
 _CONFIG_PATH = os.path.join(os.path.dirname(__file__), "..", "cars.json")
 
@@ -132,7 +131,7 @@ def _engine_filter_passes(v: dict, trim: str, source: str | None = None) -> bool
 # Managed by canonical_trim; _llm_canonical_trim itself is a pure LLM call so
 # it can be monkeypatched in tests without breaking cache behaviour.
 _CACHE_FILE = os.path.join(os.path.dirname(__file__), "..", ".trim_cache.json")
-_llm_trim_cache: dict[tuple[str, str, str], Optional[str]] = None
+_llm_trim_cache: dict[tuple[str, str, str], str | None] = None
 
 
 def _load_trim_cache():
@@ -181,7 +180,7 @@ def get_llm_client():
     return _llm_client
 
 
-def _llm_canonical_trim(make: str, model: str, raw_trim: str, allowed_trims: list[str]) -> Optional[str]:
+def _llm_canonical_trim(make: str, model: str, raw_trim: str, allowed_trims: list[str]) -> str | None:
     """Pure LLM call: map raw_trim to one of allowed_trims.
 
     Returns the matched canonical trim (guaranteed to be in allowed_trims), or

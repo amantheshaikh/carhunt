@@ -72,7 +72,7 @@ def _build_dealer_com_url(inventory_url: str, makes: list[str] | None, min_year:
         
     # Filter by make only. Model names often don't match Dealer.com names (e.g. "NX 350h" vs "NX").
     # Year params intentionally omitted: DDC SSR breaks with multiple year= values
-    # (2+ years → 0 li.vehicle-card rendered). Year filtering handled by _add_used instead.
+    # (2+ years → 0 li.vehicle-card rendered). Year filtering handled downstream in scrape_dealer instead.
     if makes:
         params["make"] = list(makes)
 
@@ -216,8 +216,8 @@ async def _scrape_cobalt_async(inventory_url: str, brand: str,
         # Register BEFORE goto so we don't miss responses on fast networks
         page.on("response", _on_response)
         # Navigate to bare URL — URL-level make/year params break the Dealer.com SPA's
-        # getInventory POST body, causing it to return 0 results. Post-filtering in _add_used
-        # covers the same ground without touching the SPA's API call.
+        # getInventory POST body, causing it to return 0 results. Year/make filtering handled
+        # downstream in scrape_dealer without touching the SPA's API call.
         try:
             await page.goto(inventory_url, wait_until="domcontentloaded", timeout=30_000)
             await page.wait_for_timeout(6_000)
@@ -676,10 +676,10 @@ def _normalize_overfuel(v: dict, brand: str, website_url: str = _OVERFUEL_BASE_U
     rel_url = v.get("url", "")
     photos = v.get("photos") or []
     photo_urls = [
-        p["url"] if isinstance(p, dict) else p
-        for p in photos
-        if (isinstance(p, dict) and p.get("url")) or isinstance(p, str)
-    ] if isinstance(photos, list) else []
+        p["url"]
+        for p in (photos if isinstance(photos, list) else [])
+        if isinstance(p, dict) and p.get("url")
+    ]
     dealer  = v.get("dealer") or {}
     return _make_listing(
         brand, v.get("vin") or v.get("stocknumber") or rel_url[-20:],
@@ -1624,8 +1624,8 @@ async def _scrape_dealer_inventory_async(inventory_url: str, brand: str,
                         if detail_pg:
                             try:
                                 await detail_pg.close()
-                            except Exception:
-                                pass
+                            except Exception as _ce:
+                                print(f"    [detail] close error: {type(_ce).__name__}", flush=True)
                     title = card.get("title", "")
                     year_s, make, model, trim = _parse_title(title)
                     trim = re.sub(r"^\d+\.\d+[TtLlHhVv]\s*", "", trim).strip()
@@ -2334,13 +2334,9 @@ def scrape_dealer(site: dict, makes: list[str] | None = None,
                 continue
             
             # Coerce year, mileage, and price safely using _int
-            l["year"] = _int(l.get("year"))
-            year = l["year"]
-
-            l["mileage"] = _int(l.get("mileage"))
-
-            l["price"] = _int(l.get("price"))
-            price = l["price"]
+            year  = _int(l.get("year"));    l["year"]    = year
+            mileage = _int(l.get("mileage")); l["mileage"] = mileage
+            price = _int(l.get("price"));   l["price"]   = price
 
             if year and (year < min_year or (max_year and year > max_year)):
                 continue
@@ -2412,13 +2408,7 @@ def scrape_dealer(site: dict, makes: list[str] | None = None,
                             _add_used(cpo_listings)
                             break
                     except Exception:
-                        pass
-            elif cfg.get("type") == "dealerinspire_algolia":
-                _add_used(_scrape_dealerinspire_algolia(
-                    cfg["app_id"], cfg["api_key"], cfg["index"], site["brand"],
-                    site.get("website_url", site["inventory_url"]),
-                    makes, min_year, max_year,
-                ))
+                        pass  # CPO is best-effort; main inventory already added
             elif cfg.get("type") == "dealerinspire_html":
                 # DealerInspire sites: intercept live Algolia credentials from the page's
                 # own network requests, then query Algolia directly with make/year filters.
@@ -2482,7 +2472,7 @@ def scrape_dealer(site: dict, makes: list[str] | None = None,
                         _add_used(cpo_listings)
                         break
                 except (concurrent.futures.TimeoutError, Exception):
-                    pass
+                    pass  # CPO is best-effort; main inventory already added
 
     if update_cooldown:
         execute("UPDATE dealer_sites SET last_scraped_at = now() WHERE id = %s", (site["id"],))
