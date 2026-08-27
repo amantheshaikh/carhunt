@@ -114,3 +114,50 @@ def test_touch_existing_price_drop_reactivation():
         _touch_existing("cargurus", "ext123", 35000, 33000)
         executed_sqls_inc = [call[0][0] for call in mock_cur.execute.call_args_list]
         assert not any("status = 'dismissed'" in sql for sql in executed_sqls_inc)
+
+
+def test_is_valid_no_price():
+    listing = {
+        "make": "Hyundai", "model": "Tucson Hybrid", "trim": "SEL Convenience",
+        "year": 2025, "mileage": 10000, "title_status": "clean", "accident_count": 0,
+        "price": None,
+    }
+    assert _is_valid(listing, min_year=2023, allowed_makes=["Hyundai"]) is False
+
+
+def test_is_valid_no_make():
+    listing = {
+        "make": None, "model": "Tucson Hybrid", "trim": "SEL Convenience",
+        "year": 2025, "price": 32000, "mileage": 10000, "title_status": "clean", "accident_count": 0,
+    }
+    assert _is_valid(listing, min_year=2023, allowed_makes=["Hyundai"]) is False
+
+
+def test_is_valid_cpo_bypasses_mileage_rate():
+    # CPO vehicles can have higher mileage — rate validation should not apply
+    listing = {
+        "make": "BMW", "model": "X3", "trim": "xDrive30i",
+        "year": 2023, "price": 38000, "mileage": 40000,
+        "title_status": "clean", "accident_count": 0, "condition": "cpo",
+    }
+    # 40k miles on a 3-year-old car = ~13k mi/yr — valid, should not be rejected
+    assert _is_valid(listing, min_year=2023, allowed_makes=["BMW"]) is True
+
+
+def test_is_valid_max_year_constraint():
+    base = {
+        "make": "Volkswagen", "model": "Tiguan", "trim": "SE R-Line Black",
+        "price": 30000, "mileage": 5000, "title_status": "clean", "accident_count": 0,
+    }
+    # Tiguan max_year=2025; 2026 should be rejected
+    assert _is_valid({**base, "year": 2026}, min_year=2023, allowed_makes=["Volkswagen"]) is False
+    assert _is_valid({**base, "year": 2025}, min_year=2023, allowed_makes=["Volkswagen"]) is True
+
+
+def test_is_valid_flood_title():
+    listing = {
+        "make": "Kia", "model": "Sportage Hybrid", "trim": "EX",
+        "year": 2024, "price": 28000, "mileage": 15000, "accident_count": 0,
+        "title_status": "flood",
+    }
+    assert _is_valid(listing, min_year=2023, allowed_makes=["Kia"]) is False

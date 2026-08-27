@@ -133,9 +133,49 @@ def test_score_listing_overflow_bounds():
     # Extreme overpriced values should not raise OverflowError, they should clip to 0.0
     assert score_listing(1_000_000, 30_000, 600.0) == 0.0
     assert score_listing(10_000_000, 30_000) == 0.0
-    
+
     # Extreme underpriced values should not raise OverflowError, they should clip to 100.0
     assert score_listing(1, 30_000, 600.0) == 100.0
     assert score_listing(1, 30_000) == 100.0
+
+
+def test_score_deal_category_thresholds():
+    # At exactly fair value → Fair Price (≈50)
+    assert 45 <= score_listing(30_000, 30_000) <= 58
+
+    # ~1σ below fair (residual_std=3000, discount=$3k) → approaches Great Deal (≥70)
+    score_great = score_listing(27_000, 30_000, residual_std=3000)
+    assert score_great >= 70
+
+    # ~2σ below fair (z=2, k=0.94 → sigmoid(1.88) ≈ 86.8) → strong deal, approaches Exceptional
+    score_exceptional = score_listing(24_000, 30_000, residual_std=3000)
+    assert score_exceptional >= 85
+
+    # Slightly above fair → Poor Value (<45)
+    score_poor = score_listing(33_000, 30_000, residual_std=3000)
+    assert score_poor < 45
+
+
+def test_drivetrain_b4_fwd_b6_awd_boundary():
+    # " b4 " keyword (space-padded) → FWD; " b6 " → AWD
+    assert detect_drivetrain("XC40 B4 Plus", None) == "fwd"
+    assert detect_drivetrain("XC60 B6 AWD", None) == "awd"
+    # Without spaces, should NOT match (avoid substring collision with e.g. "B4B")
+    # The keywords use space-padding so "AB4C" won't match
+    assert detect_drivetrain("PHEV T8 Ultimate", None) == "unknown"  # no drivetrain keyword
+
+
+def test_powertrain_350h_400h_500h():
+    assert detect_powertrain("NX 350h Premium", None) == "hybrid"
+    assert detect_powertrain("RX 400h", None) == "hybrid"
+    assert detect_powertrain("LS 500h", None) == "hybrid"
+
+
+def test_drivetrain_from_url_slug():
+    # Dealers encode drivetrain in listing URL slugs; scoring appends slug text
+    # xdrive in slug → AWD
+    assert detect_drivetrain("xdrive30i sports activity", None) == "awd"
+    # sdrive in slug → FWD (non-AWD)
+    assert detect_drivetrain("sdrive30i sports activity", None) == "fwd"
 
 

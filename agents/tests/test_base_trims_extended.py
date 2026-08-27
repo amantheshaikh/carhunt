@@ -6,6 +6,7 @@ from tools.base_trims import (
     normalize_listing_model,
     split_xc60_model,
     canonical_trim,
+    is_trim_allowed,
     is_trim_allowed_for_training,
     get_model_min_year,
     get_model_max_year,
@@ -63,3 +64,57 @@ def test_year_constraint_helpers():
 
     # Trim level year bounds (e.g. BMW X3 sDrive30i max_year is 2024)
     assert get_trim_max_year("BMW", "X3", "sDrive30i") == 2024
+
+
+def test_canonical_trim_engine_prefix_stripped():
+    # _normalize_trim strips engine prefix before matching, so Pass 1 works on the stripped form
+    # "350h Premium" → strip "350h " → "premium" → matches NX 350h allowed trim "Premium"
+    assert canonical_trim("Lexus", "NX 350h", "350h Premium") == "Premium"
+    assert canonical_trim("Lexus", "NX 350h", "350h F SPORT") == "F SPORT"
+    # "2.5T Standard" → strip "2.5T " → "standard" → matches "Standard" in GV70 trims
+    assert canonical_trim("Genesis", "GV70", "2.5T Standard") == "Standard"
+    assert canonical_trim("Genesis", "GV70", "2.5T Advanced Plus") == "Advanced Plus"
+
+
+def test_is_trim_allowed_gv70_engine_filter():
+    # GV70 has engine_filter: ["2.5T"] — 3.5T variants must be rejected regardless of trim name
+    assert is_trim_allowed("Genesis", "GV70", "3.5T Sport Prestige") is False
+    assert is_trim_allowed("Genesis", "GV70", "2.5T Advanced") is True
+    assert is_trim_allowed("Genesis", "GV70", "2.5T Sport Prestige") is True
+    # No engine qualifier at all → rejected (can't confirm it's 2.5T)
+    assert is_trim_allowed("Genesis", "GV70", "Advanced") is False
+
+
+def test_is_trim_allowed_sportage_phev_trims():
+    # PHEV-specific trims allowed on PHEV, not on Hybrid
+    assert is_trim_allowed("Kia", "Sportage PHEV", "EX Premium") is True   # PHEV-exclusive
+    assert is_trim_allowed("Kia", "Sportage PHEV", "X-Line Prestige") is True
+    # EX is shared between Hybrid and PHEV
+    assert is_trim_allowed("Kia", "Sportage Hybrid", "EX") is True
+    assert is_trim_allowed("Kia", "Sportage PHEV", "EX") is True
+    # LX is not in either allowed list
+    assert is_trim_allowed("Kia", "Sportage Hybrid", "LX") is False
+    assert is_trim_allowed("Kia", "Sportage PHEV", "LX") is False
+
+
+def test_canonical_trim_volvo_b5_b4_prefix():
+    # Volvo XC40: "B4 Plus" → strip "B4 " (but B4 isn't matched by _ENGINE_PREFIXES regex)
+    # actual behavior: whole-word substring finds "Plus" in "b4 plus"
+    assert canonical_trim("Volvo", "XC40", "B4 Plus") == "Plus"
+    assert canonical_trim("Volvo", "XC40", "B5 Ultimate Dark Theme") == "Ultimate"
+
+
+def test_split_xc60_model_no_trim():
+    # When trim is None/empty, default to gas ("XC60") — can't determine PHEV without trim text
+    assert split_xc60_model("Volvo", "XC60", None) == "XC60"
+    assert split_xc60_model("Volvo", "XC60", "") == "XC60"
+
+
+def test_normalize_listing_model_xc60_recharge_via_trim():
+    mk, mo = normalize_listing_model("Volvo", "XC60", "Recharge T8 Ultimate")
+    assert mk == "Volvo"
+    assert mo == "XC60 Recharge"
+
+    mk, mo = normalize_listing_model("Volvo", "XC60", "B5 Plus AWD")
+    assert mk == "Volvo"
+    assert mo == "XC60"

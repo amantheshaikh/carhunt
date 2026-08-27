@@ -62,3 +62,59 @@ def test_parse_history_lemon_detection():
     history = _parse_history(page_text)
     assert history["title_status"] == "lemon"
     assert history["mileage"] == 18200
+
+
+def test_parse_history_salvage_title():
+    # The salvage pattern requires "salvage title" (adjacent words)
+    page_text = """
+    Vehicle History: Salvage Title
+    1 accidents reported
+    Odometer: 62,000 miles
+    """
+    history = _parse_history(page_text)
+    assert history["title_status"] == "salvage"
+    assert history["accident_count"] == 1
+
+
+def test_parse_history_rebuilt_title():
+    # "rebuilt title" is captured under the salvage patterns (same status bucket)
+    page_text = """
+    Title: Rebuilt Title
+    0 accidents reported
+    Mileage: 44,500 miles
+    """
+    history = _parse_history(page_text)
+    assert history["title_status"] == "salvage"  # rebuilt title maps to salvage status
+
+
+def test_parse_history_fleet_vehicle():
+    # Pattern: "fleet vehicle" or "fleet vehicle"
+    page_text = """
+    Vehicle Use: Fleet Vehicle
+    0 accidents reported
+    Odometer: 78,100 miles
+    """
+    history = _parse_history(page_text)
+    assert history["title_status"] == "fleet"
+    assert history["accident_count"] == 0
+
+
+def test_parse_history_multiple_owners():
+    # Accident pattern requires "accidents reported" — "no accidents reported" → 0
+    page_text = """
+    No accidents reported
+    3 Previous Owners
+    Mileage: 55,200 miles
+    """
+    history = _parse_history(page_text)
+    assert history["title_status"] == "clean"
+    assert history["owner_count"] == 3
+    assert history["accident_count"] == 0
+
+
+def test_parse_history_no_data():
+    # With no matching patterns, title_status defaults to "clean" (not None)
+    history = _parse_history("")
+    assert history["accident_count"] is None
+    assert history["title_status"] == "clean"  # default when no bad patterns found
+    assert history["mileage"] is None
