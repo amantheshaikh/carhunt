@@ -412,5 +412,5 @@ PROXY_URL=...                   # optional: http://user:pass@host:port for resid
 - **`user_notes`** — `TEXT` column on `listings`; editable via the detail panel textarea and `PATCH /api/listings/:id`. Auto-saves on blur.
 - **Stacked model pickle path** — per-model `StackedModel` dataclass saved as `price_model_{slug}.pkl`. `StackedModel.__module__` is forced to `tools.price_model` at definition time to prevent `__main__` pickle namespace issues when training via CLI.
 - **Dedup within a run:** `known_urls`, `known_vins`, `known_price_fps`, `known_dealer_fps` fetched once before the source loop, shared across all sources including dealers.
-- **LLM token optimization:** All LLM calls use module-level shared OpenAI clients. Insight text pre-processed via `_focus_listing_text()` to a 2000-char focused window. Output caps: insights=150 (raised from 120 to accommodate trim field), trim=30, summary=80, query=500.
+- **LLM token optimization:** All LLM calls use module-level shared OpenAI clients. Insight text pre-processed via `_focus_listing_text()` to a 2000-char focused window. Output caps: insights=250 (raised from 150 to prevent mid-JSON truncation on listings with packages/owner_notes), trim=30, summary=80, query=500.
 - **Postgres runs in Docker** (`docker compose up -d db`). Schema in `db/schema.sql`.

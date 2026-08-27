@@ -720,7 +720,7 @@ def _extract_insights_llm(text: str, allowed_trims: list[str] | None = None) -> 
         resp = client.chat.completions.create(
             model="deepseek/deepseek-v4-flash",
             messages=[{"role": "user", "content": prompt}],
-            max_tokens=150,
+            max_tokens=250,
             timeout=15,
             response_format={"type": "json_object"},
         )
