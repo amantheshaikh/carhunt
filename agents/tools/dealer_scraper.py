@@ -2110,7 +2110,10 @@ _LLM_EXTRACT_MODEL = "deepseek/deepseek-v4-flash"  # ~$0.001/dealer/run via Open
 
 # JS: extract vehicle listing text from the page, falling back to full body text.
 # Uses innerText (not outerHTML) for compactness so prices/mileage fit within the LLM context slice.
-# Cards are capped at 20 (×800 chars each) → max ~16k chars of card content.
+# Cards are capped at 100 per page-load (×800 chars each); the Python side chunks them into
+# groups of 20 for separate LLM calls. This matters for infinite-scroll/lazy-load sites (all
+# inventory on one URL, no "next page" link) where 100 is well above realistic single-dealer
+# inventory size, so nothing gets silently dropped just because pagination never advances.
 _CARD_EXTRACT_JS = """() => {
     function cardText(el) {
         const vin = el.getAttribute && (el.getAttribute('data-vin') || el.getAttribute('data-vehicle-vin') || '');
@@ -2127,7 +2130,7 @@ _CARD_EXTRACT_JS = """() => {
     for (const sel of EXACT) {
         const cards = document.querySelectorAll(sel);
         if (cards.length >= 3)
-            return { sel, cards: Array.from(cards).slice(0, 20).map(cardText) };
+            return { sel, cards: Array.from(cards).slice(0, 100).map(cardText) };
     }
 
     // Pass 2: find [data-vin] elements and walk up to the ancestor that contains price + mileage
@@ -2153,7 +2156,7 @@ _CARD_EXTRACT_JS = """() => {
                 }
                 node = node.parentElement;
             }
-            if (cards.length >= 20) break;
+            if (cards.length >= 100) break;
         }
         if (cards.length >= 3) return { sel: '[data-vin]→text', cards };
     }
@@ -2229,41 +2232,50 @@ async def _scrape_llm_extract_async(inventory_url: str, brand: str,
 
                 cards = card_data.get("cards") or []
                 if cards:
-                    content = "\n---CARD---\n".join(cards)
-                    ctx_desc = f"{len(cards)} cards ({card_data['sel']})"
+                    # Chunk into groups of 20 cards per LLM call — the DOM extraction cap (100)
+                    # is well above one LLM call's context budget, which matters for infinite-scroll
+                    # sites where all inventory loads on a single URL with no "next page" to advance to.
+                    chunks = [cards[i:i + 20] for i in range(0, len(cards), 20)]
+                    ctx_desc = f"{len(cards)} cards ({card_data['sel']}) in {len(chunks)} chunk(s)"
                 else:
-                    content = card_data.get("fallback", "")
+                    chunks = [[card_data.get("fallback", "")]] if card_data.get("fallback", "").strip() else []
                     ctx_desc = "full page text"
                 print(f"    [llm_extract] p{page_num}: {ctx_desc}", flush=True)
 
-                if not content.strip():
+                if not chunks:
                     break
 
-                prompt = (
-                    "Extract used vehicle listings from this dealer inventory page.\n"
-                    'Return JSON: {"listings": [...]} where each item has:\n'
-                    "  vin (17-char string or null), year (int), make (string), model (string),\n"
-                    "  trim (string or null), price (int USD no $ or commas), mileage (int miles),\n"
-                    "  url (detail page href — look in href= attributes)\n\n"
-                    f"FILTER: only include used/pre-owned/certified vehicles where:\n"
-                    f"  make is one of [{makes_str}]\n"
-                    f"  year {year_filter}\n"
-                    "VINs are often in data-vin, data-vehiclevin attributes or URL paths — check HTML attributes.\n\n"
-                    f"Content:\n{content[:12000]}"
-                )
+                page_items: list = []
+                for chunk_num, chunk in enumerate(chunks, 1):
+                    content = "\n---CARD---\n".join(chunk) if cards else chunk[0]
+                    if not content.strip():
+                        continue
 
-                try:
-                    resp = client.chat.completions.create(
-                        model=_LLM_EXTRACT_MODEL,
-                        messages=[{"role": "user", "content": prompt}],
-                        temperature=0,
-                        max_tokens=3000,
-                        response_format={"type": "json_object"},
+                    prompt = (
+                        "Extract used vehicle listings from this dealer inventory page.\n"
+                        'Return JSON: {"listings": [...]} where each item has:\n'
+                        "  vin (17-char string or null), year (int), make (string), model (string),\n"
+                        "  trim (string or null), price (int USD no $ or commas), mileage (int miles),\n"
+                        "  url (detail page href — look in href= attributes)\n\n"
+                        f"FILTER: only include used/pre-owned/certified vehicles where:\n"
+                        f"  make is one of [{makes_str}]\n"
+                        f"  year {year_filter}\n"
+                        "VINs are often in data-vin, data-vehiclevin attributes or URL paths — check HTML attributes.\n\n"
+                        f"Content:\n{content[:12000]}"
                     )
-                    page_items = json.loads(resp.choices[0].message.content or "{}").get("listings") or []
-                except Exception as e:
-                    print(f"    [llm_extract] LLM error p{page_num}: {e}", flush=True)
-                    break
+
+                    try:
+                        resp = client.chat.completions.create(
+                            model=_LLM_EXTRACT_MODEL,
+                            messages=[{"role": "user", "content": prompt}],
+                            temperature=0,
+                            max_tokens=3000,
+                            response_format={"type": "json_object"},
+                        )
+                        page_items.extend(json.loads(resp.choices[0].message.content or "{}").get("listings") or [])
+                    except Exception as e:
+                        print(f"    [llm_extract] LLM error p{page_num} chunk{chunk_num}: {e}", flush=True)
+                        continue
 
                 new_count = 0
                 for v in page_items:

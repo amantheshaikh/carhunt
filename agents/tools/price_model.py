@@ -15,8 +15,8 @@ SHAP waterfall still runs on the GB component (TreeExplainer requirement).
 Models with < 30 rows are skipped; those listings return unscored.
 
 Saved as: agents/tools/price_model_{model_slug}.pkl  (StackedModel dataclass)
-Gas/PHEV splits (e.g. XC60 vs XC60 Recharge) are handled as separate cars.json
-entries with separate model names, not via a code-level split.
+Gas/PHEV splits are handled as separate cars.json entries with separate
+model names, not via a code-level split.
 """
 import math
 import os
@@ -86,7 +86,6 @@ _MIN_ROWS = 30   # minimum training rows to fit a per-model estimator
 _TRIM_LEVELS: dict[str, dict[str, int]] = {
     "tucson hybrid":    {"blue": 1, "sel": 2, "sel convenience": 3, "n line": 4, "limited": 5, "sel n-line": 4},
     "sportage hybrid":  {"lx": 1, "ex": 2, "sx": 3, "sx prestige": 4, "x-line": 4, "x-pro": 5, "x-pro prestige": 6, "prestige": 4},
-    "sportage phev":    {"ex": 1, "ex premium": 2, "x-line": 3, "x-line prestige": 4, "sx": 5},
     "gv70":             {"standard": 1, "select": 2, "advanced": 3, "advanced plus": 3.5, "sport prestige": 4},
     "tiguan":           {"s": 1, "se": 2, "se r-line": 3, "se r-line black": 4, "sel": 4, "sel premium": 5, "sel r-line black": 5},
     "encore gx":        {"preferred": 1, "sport touring": 2, "avenir": 3},
@@ -97,8 +96,8 @@ _TRIM_LEVELS: dict[str, dict[str, int]] = {
     "nx 350h":          {"premium": 2, "luxury": 3, "f sport": 3},
     "xc40":             {"core": 1, "plus": 2, "ultimate": 3},
     "xc60":             {"core": 1, "plus": 2, "ultimate": 3},
-    "xc60 recharge":   {"core": 1, "plus": 2, "ultimate": 3},
     "q5":               {"premium": 1, "premium plus": 2, "prestige": 3},
+    "mustang mach-e":   {"select": 1, "premium": 2, "california route 1": 3, "gt": 4, "rally": 4},
 }
 
 _ALL_MODELS = list(_TRIM_LEVELS.keys())
@@ -268,13 +267,11 @@ _DRIVETRAIN_DEFAULTS: dict[tuple[str, str, int], str] = {
     ("buick",   "envision",        2024): "awd",  # 2024+ Envision is AWD-only
     ("hyundai", "tucson hybrid",   2025): "awd",  # 2025+ Tucson Hybrid is AWD-only
     ("kia",     "sportage hybrid", 2026): "awd",  # 2026 Sportage Hybrid EX/SX Prestige are AWD-only
-    ("kia",     "sportage phev",   2023): "awd",  # Sportage PHEV is AWD-only (all years)
     ("genesis", "gv70",            2022): "awd",  # GV70 is AWD-only in US (all trims)
     ("lexus",   "nx 350h",         2022): "awd",  # NX 350h is AWD-only in US (from 2022 launch)
     ("bmw",     "x1",              2023): "awd",  # 2023–2025 X1 only has xDrive28i (M35i excluded)
     ("bmw",     "x3",              2025): "awd",  # 2025 X3 only has xDrive30i
     ("volvo",   "xc60",            2024): "awd",  # 2024+ XC60 all AWD; 2023 B5 can be FWD — detect from trim
-    ("volvo",   "xc60 recharge",  2023): "awd",  # XC60 Recharge T8 eAWD
     ("volvo",   "xc40",           2024): "awd",  # 2024+ XC40: B4 FWD dropped, all variants AWD
     # XC40 2023: B4=FWD, B5 FWD or AWD — detect from raw trim text
     ("audi",    "q5",             2022): "awd",  # Q5 is always quattro AWD in US market
@@ -379,7 +376,6 @@ def _make_ridge_pipeline() -> Pipeline:
 _PLATFORM_MIN_YEAR: dict[str, int] = {
     "tucsonhybrid":   2022,  # TNGA-K hybrid platform gen launched 2022
     "sportagehybrid": 2023,  # NQ5 platform launched 2023
-    "sportagephev":   2023,  # PHEV also on NQ5 platform (launched 2023)
     "gv70":            2022,  # JX1 platform launched 2022 for US
     "tiguan":          2022,  # MK2 LCI refresh 2022 (new interior/features)
     "encoregx":        2024,  # 2024 refresh changed trims (Preferred/Sport Touring/Avenir); pre-2024 is different lineup
@@ -390,8 +386,8 @@ _PLATFORM_MIN_YEAR: dict[str, int] = {
     "nx350h":         2022,  # TNGA-K gen launched 2022; prior NX hybrids are different generation
     "xc40":            2023,  # CMA platform refresh; 2022 and earlier is a different gen
     "xc60":            2023,  # SPA platform refresh for 2023+
-    "xc60recharge":   2023,  # Recharge T8 PHEV also on SPA refresh platform
     "q5":              2022,  # B9.5 refresh launched 2021; 2022+ is stable gen target
+    "mustangmache":   2023,  # single generation since 2021 launch; matches target floor
 }
 
 

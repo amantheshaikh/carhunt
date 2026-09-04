@@ -119,6 +119,15 @@ def test_drivetrain_extra_keywords():
     assert detect_drivetrain("3 Series RWD", None) == "fwd"
     assert detect_drivetrain("2WD SE", None) == "fwd"
 
+
+def test_drivetrain_ev_dual_motor_convention():
+    # EV dealer listings often say "Dual Electric Motor" (AWD) vs "Electric Motor" (single = RWD)
+    # instead of spelling out AWD/RWD directly (e.g. Ford Mustang Mach-E)
+    assert detect_drivetrain("Premium SUV Dual Electric Motor", "Mustang Mach-E") == "awd"
+    assert detect_drivetrain("GT SUV Dual Electric Motor", "Mustang Mach-E") == "awd"
+    # Single motor alone has no explicit awd/rwd keyword -> stays unknown rather than guessing
+    assert detect_drivetrain("Premium SUV Electric Motor", "Mustang Mach-E") == "unknown"
+
 def test_powertrain_extra_keywords():
     assert detect_powertrain("XC90 T8 Recharge", None) == "phev"
     assert detect_powertrain("plug in hybrid SE", None) == "phev"

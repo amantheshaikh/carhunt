@@ -25,14 +25,18 @@ def test_split_xc60_model_gas_vs_phev():
     assert split_xc60_model("Volvo", "XC60", "T8 Core PHEV") == "XC60 Recharge"
 
 def test_normalize_listing_model_canonical_casing():
-    # Test case-insensitivity & XC60 split
-    mk, mo = normalize_listing_model("volvo", "xc60", "Plus Recharge T8")
-    assert mk == "Volvo"
-    assert mo == "XC60 Recharge"
-
     mk, mo = normalize_listing_model("HYUNDAI", "tucson hybrid", "Limited")
     assert mk == "Hyundai"
     assert mo == "Tucson Hybrid"
+
+def test_normalize_listing_model_xc60_recharge_still_split_but_not_a_target():
+    # XC60 Recharge is no longer a tracked vehicle (removed from cars.json), but
+    # split_xc60_model still correctly separates it out so it fails the allowlist
+    # check downstream instead of being silently mislabeled as gas XC60. Since it
+    # has no cars.json entry, it falls through without canonical-casing.
+    mk, mo = normalize_listing_model("volvo", "xc60", "Plus Recharge T8")
+    assert mk == "volvo"
+    assert mo == "XC60 Recharge"
 
 def test_canonical_trim_bmw_token_reorder():
     # Pass 2 BMW token-reorder: "30 xDrive" -> "xDrive30i"
@@ -85,16 +89,17 @@ def test_is_trim_allowed_gv70_engine_filter():
     assert is_trim_allowed("Genesis", "GV70", "Advanced") is False
 
 
-def test_is_trim_allowed_sportage_phev_trims():
-    # PHEV-specific trims allowed on PHEV, not on Hybrid
-    assert is_trim_allowed("Kia", "Sportage PHEV", "EX Premium") is True   # PHEV-exclusive
-    assert is_trim_allowed("Kia", "Sportage PHEV", "X-Line Prestige") is True
-    # EX is shared between Hybrid and PHEV
+def test_is_trim_allowed_sportage_hybrid_trims():
     assert is_trim_allowed("Kia", "Sportage Hybrid", "EX") is True
-    assert is_trim_allowed("Kia", "Sportage PHEV", "EX") is True
-    # LX is not in either allowed list
+    # LX is not in the allowed list
     assert is_trim_allowed("Kia", "Sportage Hybrid", "LX") is False
-    assert is_trim_allowed("Kia", "Sportage PHEV", "LX") is False
+
+
+def test_is_trim_allowed_sportage_phev_untracked_allows_any_trim():
+    # Sportage PHEV was removed as a target vehicle (no cars.json entry) -> _find_vehicle
+    # returns None, so is_trim_allowed can't filter what it doesn't know and allows everything.
+    assert is_trim_allowed("Kia", "Sportage PHEV", "EX Premium") is True
+    assert is_trim_allowed("Kia", "Sportage PHEV", "LX") is True
 
 
 def test_canonical_trim_volvo_b5_b4_prefix():

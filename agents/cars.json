@@ -25,17 +25,6 @@
       }
     },
     {
-      "make": "Kia", "model": "Sportage PHEV", "cargurus_id": "d3244",
-      "cargurus_search_path": "m33,m33/d3244,m33/d3244/EX AWD,m33/d3244/EX Premium AWD,m33/d3244/SX AWD,m33/d3244/X-Line AWD,m33/d3244/X-Line Prestige AWD",
-      "trims": ["EX", "EX Premium", "X-Line", "X-Line Prestige", "SX"],
-      "min_year": 2023, "max_year": 2025,
-      "msrp": {
-        "2023": { "EX": 33490, "EX Premium": 37490, "X-Line": 37890, "X-Line Prestige": 41890, "SX": 40490 },
-        "2024": { "EX": 33990, "EX Premium": 37990, "X-Line": 38390, "X-Line Prestige": 42390, "SX": 40990 },
-        "2025": { "EX": 34790, "EX Premium": 38790, "X-Line": 39190, "X-Line Prestige": 43190, "SX": 41790 }
-      }
-    },
-    {
       "make": "Kia", "model": "Sportage Hybrid", "cargurus_id": "d3239",
       "cargurus_search_path": "m33,m33/d3239,m33/d3239/EX AWD,m33/d3239/EX FWD,m33/d3239/SX-Prestige AWD,m33/d3239/X-Line AWD",
       "trims": ["EX", "X-Line", "SX Prestige"],
@@ -128,16 +117,6 @@
       }
     },
     {
-      "make": "Volvo", "model": "XC60 Recharge", "cargurus_id": "d1629",
-      "trims": ["Plus", "Ultimate"],
-      "min_year": 2023, "max_year": 2025,
-      "msrp": {
-        "2023": { "Plus": 58845, "Ultimate": 66845 },
-        "2024": { "Plus": 59845, "Ultimate": 67845 },
-        "2025": { "Plus": 61845, "Ultimate": 69845 }
-      }
-    },
-    {
       "make": "Cadillac", "model": "XT4", "cargurus_id": "d2673",
       "cargurus_search_path": "m22,m22/d2673,m22/d2673/Luxury AWD,m22/d2673/Luxury FWD,m22/d2673/Premium Luxury AWD,m22/d2673/Premium Luxury FWD,m22/d2673/Sport AWD,m22/d2673/Sport FWD",
       "trims": ["Luxury", "Premium Luxury", "Sport"],
@@ -172,6 +151,18 @@
         "2023": { "Premium": 43900, "Premium Plus": 49000, "Prestige": 55700 },
         "2024": { "Premium": 44600, "Premium Plus": 49400, "Prestige": 54900 },
         "2025": { "Premium": 45400, "Premium Plus": 51100, "Prestige": 54700 }
+      }
+    },
+    {
+      "make": "Ford", "model": "Mustang Mach-E", "cargurus_id": "d2990",
+      "cargurus_search_path": "m2,m2/d2990,m2/d2990/Premium AWD,m2/d2990/Premium RWD",
+      "trims": ["Premium"],
+      "training_trims": ["Select", "Premium", "California Route 1", "GT", "Rally"],
+      "min_year": 2023,
+      "msrp": {
+        "2023": { "Select": 42995, "Premium": 46995, "California Route 1": 56995, "GT": 59995 },
+        "2024": { "Select": 39995, "Premium": 43995, "GT": 54995, "Rally": 60000 },
+        "2025": { "Select": 37995, "Premium": 41995, "GT": 54495 }
       }
     }
   ]

@@ -100,20 +100,13 @@ def _insert(rows: list[dict], allowed_norm: set[str], min_year: int | None = Non
         if not all([make, model, year, price]):
             continue
         make, model = normalize_listing_model(make, model, l.get("trim"))
-        # Check allowlist — treat "xc60recharge" as "xc60" since they share a CarGurus page
-        check_norm = _norm(model)
-        if check_norm == "xc60recharge":
-            check_norm = "xc60"
-        if check_norm not in allowed_norm:
+        if _norm(model) not in allowed_norm:
             continue
 
         raw_text_base = (l.get("raw") or {}).get("text") if isinstance(l.get("raw"), dict) else None
         url_slug = (l.get("listing_url") or "").replace("-", " ").replace("/", " ")
         raw_text = " ".join(filter(None, [raw_text_base, url_slug])) or None
 
-        # Re-check allowlist after normalize_listing_model (XC60 split) to filter out gas XC60
-        if _norm(model) not in allowed_norm:
-            continue
         if min_year and int(year) < min_year:
             continue
         if max_year and int(year) > max_year:

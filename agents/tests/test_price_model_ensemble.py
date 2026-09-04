@@ -107,9 +107,6 @@ def test_resolve_drivetrain_xc60_always_awd():
     row = {"make": "Volvo", "model": "XC60", "year": 2023, "trim": "Plus B5 AWD"}
     assert resolve_drivetrain(row) == "awd"
 
-    row_recharge = {"make": "Volvo", "model": "XC60 Recharge", "year": 2024, "trim": "Ultimate T8"}
-    assert resolve_drivetrain(row_recharge) == "awd"
-
 
 def test_resolve_drivetrain_bmw_x3_sdrive_older():
     # BMW X3 sDrive30i is RWD/FWD and only valid ≤2024

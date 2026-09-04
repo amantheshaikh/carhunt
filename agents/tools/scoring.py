@@ -11,6 +11,7 @@ def detect_drivetrain(trim: str | None, model: str | None, raw_text: str | None 
                                 "quattro",   # Audi quattro = AWD
                                 "4matic",    # Mercedes-Benz 4MATIC = AWD
                                 " b6 ",      # Volvo B6 = AWD standard
+                                "dual motor", "dual electric motor",  # EV convention: dual motor = AWD (e.g. Mach-E)
                                 )):
         return "awd"
     if any(k in text for k in ("fwd", "front-wheel", "front wheel", "2wd", "rwd",
@@ -27,7 +28,7 @@ def detect_powertrain(trim: str | None, model: str | None, raw_text: str | None 
         return "phev"
     if any(k in text for k in ("hybrid", "350h", "400h", "500h")):
         return "hybrid"
-    if any(k in text for k in ("electric", " ev ", "bev", "ioniq")):
+    if any(k in text for k in ("electric", " ev ", "bev", "ioniq", "mach-e", "mach e")):
         return "electric"
     return "gas"
 

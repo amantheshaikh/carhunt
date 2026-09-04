@@ -41,7 +41,6 @@ carhunt/
 | Hyundai | Tucson Hybrid | d3141 | SEL Convenience, N Line, Limited | 2025+ |
 | Genesis | GV70 | d3163 | Standard, Select, Advanced, Advanced Plus, Sport Prestige (2.5T only) | 2023–2025 |
 | Kia | Sportage Hybrid | d3239 | EX, X-Line, SX Prestige | 2023+ |
-| Kia | Sportage PHEV | d3244 | EX, EX Premium, X-Line, X-Line Prestige, SX | 2023–2025 |
 | Volkswagen | Tiguan | d1104 | SE, SEL R-Line, SE R-Line Black | 2025 |
 | Buick | Encore GX | d2901 | Avenir | 2024+ |
 | Buick | Envision | d2398 | Preferred, Sport Touring, Avenir | 2024–2025 |
@@ -50,8 +49,9 @@ carhunt/
 | Cadillac | XT4 | d2673 | Luxury, Premium Luxury, Sport | 2024–2025 |
 | Lexus | NX 350h | d2294 | Premium, Luxury, F SPORT | 2022–2024 |
 | Volvo | XC40 | d2624 | Plus, Ultimate (B4 FWD or B5 AWD) | 2023–2025 |
-| Volvo | XC60 | d1629 | Plus, Ultimate (B5 gas or Recharge T8 PHEV) | 2023–2025 |
+| Volvo | XC60 | d1629 | Plus, Ultimate (B5 gas only — Recharge T8 PHEV no longer tracked) | 2023–2025 |
 | Audi | Q5 | d1988 | Premium Plus, Prestige | 2022–2025 |
+| Ford | Mustang Mach-E | d2990 | Premium (RWD or AWD) | 2023+ |
 
 **Search params** (stored in `user_settings` DB table):
 - Zip: 30328 · Radius: 100 mi · Max price: $45k · Years: 2025–2026
@@ -59,7 +59,7 @@ carhunt/
 
 **CarGurus IDs** are model-specific page identifiers. The new search format uses `cargurus_search_path` (make/model/trim paths encoded as `m{makeId}/d{modelId}/trimName`).
 
-**Make IDs:** Hyundai=m28, Genesis=m203, Kia=m33, VW=m55, Buick=m21, BMW=m3, Cadillac=m22, Lexus=m37, Volvo=m56, Audi=m19
+**Make IDs:** Hyundai=m28, Genesis=m203, Kia=m33, VW=m55, Buick=m21, BMW=m3, Cadillac=m22, Lexus=m37, Volvo=m56, Audi=m19, Ford=m2
 
 **Notes:**
 - BMW X1 2023–2025: xDrive28i only (always AWD). sDrive28i and M35i excluded.
@@ -68,9 +68,10 @@ carhunt/
 - Audi Q5: Premium Plus/Prestige, 2022–2025. FWD or Quattro AWD.
 - Lexus NX 350h 2022–2024: always AWD. Trim allowlist filters out NX 450h+ variants.
 - Volvo XC40: B4 = FWD, B5 = AWD (detected from trim text). No Recharge electric.
-- Volvo XC60: includes both B5 gas/MHEV (AWD) and Recharge T8 PHEV (eAWD). Stored as separate model names `"XC60"` and `"XC60 Recharge"` in the DB. `detect_powertrain` uses "recharge" keyword to classify PHEV.
+- Volvo XC60: B5 gas/MHEV (AWD) only — Recharge T8 PHEV was removed as a target (config + DB rows purged) but `split_xc60_model` in base_trims.py still labels Recharge/T8-trim listings as `"XC60 Recharge"` so they fail the allowlist and get filtered out, rather than being mislabeled and contaminating gas XC60 training data.
+- Ford Mustang Mach-E: Premium trim only, RWD or AWD (detected from trim text, both allowed). 2023+. `detect_powertrain` needs the "mach-e"/"mach e" keywords since the model name doesn't contain "electric"/"ev"/"bev".
 - Genesis GV70: `engine_filter: ["2.5T"]` — shares a CarGurus page with the 3.5T; filter requires "2.5T" in trim. All 5 trims (Standard through Sport Prestige) are sourced; training_trims matches.
-- Kia Sportage PHEV: separate model from Sportage Hybrid — different CarGurus ID (d3244), different trim set. Always AWD.
+- Kia Sportage PHEV was removed as a target (config + DB rows purged) — it had its own dedicated CarGurus ID (d3244), so unlike XC60 Recharge there's no shared-page split logic to preserve; removal was a straightforward cars.json + price_model.py overrides + pickle + DB cleanup.
 - Cadillac XT4: sourcing target for 2024–2025 Luxury/Premium Luxury/Sport. Both FWD and AWD variants.
 - Year range in `user_settings` is the global floor; per-model `min_year`/`max_year` in cars.json take precedence.
 
@@ -181,6 +182,8 @@ Score < 40 is a display category only — listings are **never** auto-dismissed 
 
 `_drivetrain_for()` in `price_model.py` (and `training_collector._insert`) also appends the listing URL slug (hyphens and slashes replaced with spaces) to the raw text before calling `detect_drivetrain`. This catches FWD/AWD encoded in dealer URL paths when the raw listing text doesn't include a drivetrain keyword.
 
+`detect_drivetrain` also recognizes `"dual motor"`/`"dual electric motor"` as AWD — EV listings (e.g. Ford Mustang Mach-E) commonly describe drivetrain this way instead of spelling out AWD/RWD. Single-motor EV trims have no explicit keyword and stay `"unknown"` rather than guessing RWD vs FWD.
+
 **Powertrain detection** (`scoring.py`) — space-padded keyword-based (handles boundaries):
 - `recharge`, `plug-in`, `phev`, `" t8 "` → PHEV (1.0)
 - `hybrid`, `350h`, `400h`, `500h` → Hybrid (0.8)
@@ -191,7 +194,7 @@ Score < 40 is a display category only — listings are **never** auto-dismissed 
 
 ## XC60 Gas / PHEV Split
 
-XC60 gas (B5) and PHEV (Recharge T8) share the same CarGurus model page, stored as separate DB model names: `"XC60"` for gas and `"XC60 Recharge"` for PHEV. The split is handled by `normalize_listing_model()` in `base_trims.py` (called from `sourcing_agent._save_new` and `training_collector._insert`), which applies `split_xc60_model` then canonical casing. The `allowed_norm` allowlist check must run **before** the split (against the original `"xc60"` name).
+XC60 gas (B5) and PHEV (Recharge T8) share the same CarGurus model page. `normalize_listing_model()` in `base_trims.py` (called from `sourcing_agent._save_new` and `training_collector._insert`) applies `split_xc60_model` to label PHEV/T8-trim listings as `"XC60 Recharge"` before canonical casing. XC60 Recharge is no longer a tracked vehicle (removed from cars.json), so listings labeled that way simply fail the allowlist check and get filtered out — `split_xc60_model` is kept specifically to prevent them from being mislabeled as gas XC60 instead. The `allowed_norm` allowlist check must run **before** the split (against the original `"xc60"` name).
 
 ---
 
@@ -336,7 +339,7 @@ PROXY_URL=...                   # optional: http://user:pass@host:port for resid
 
 ---
 
-## Active Dealer Sites (71 total)
+## Active Dealer Sites (81 total)
 
 **Volvo (5):** Dyer & Dyer, North Point, O'Steen Athens, Mall of Georgia, Marietta — all `cobalt_dom` type (switched from `cobalt` when their DDC sites stopped firing `getInventory` XHR and moved to SSR `li.vehicle-card` DOM)
 
@@ -359,6 +362,8 @@ PROXY_URL=...                   # optional: http://user:pass@host:port for resid
 **Audi (4):** Atlanta, Gwinnett, South Atlanta, North Atlanta — all `audi_one` type. Inventory URL: `/en/inventory/used/`
 
 **Toyota (4):** Atlanta Toyota (`cobalt_dom`), Cobb County Toyota (generic DOM), Marietta Toyota (generic DOM — Typesense platform, returns 0 for target makes), Nalley Toyota of Roswell (`cobalt_dom`)
+
+**Ford (10):** Akins Ford Winder (`llm_extract` — DOM uses `div.vehicle-item` cards, not the `li.vehicle-card` the `cobalt_dom` JS selector expects), Hennessy Ford Atlanta (`cobalt_dom`), ALM Ford Marietta (`dealerinspire_html` — distinct DealerInspire-hosted store, unrelated to the overfuel-backed ALM Marietta multi-brand entry), Stivers Ford South Union City (`dealerinspire_html`), Mall of Georgia Ford Buford (`cobalt_dom` — Berkshire Hathaway Automotive, unrelated to ALM's Mall of Georgia entry; exact `cobalt` vs `cobalt_dom` sub-type unverified, client-side rendered), Five Star Ford Stone Mountain (`dealerinspire_html`), Wade Ford Smyrna (`dealeron_cosmos`), Lithia Springs Ford (`dealeron_cosmos`), Allan Vigil Ford Lincoln Morrow (`dealeron_cosmos` — note `.net` domain, not `.com`), Angela Krause Ford Lincoln Alpharetta (`dealeron_cosmos` config, but confirmed via live sanity-check scrape to return 0 listings — Akamai Bot Manager likely blocks the underlying Cosmos API call even though Playwright loads the page; left active per the Marietta Toyota precedent of keeping a documented-dead entry rather than silently removing it, but don't expect data from this one without further investigation). Jim Ellis Ford Sandy Springs and "Hennessy Ford Lincoln" were investigated but not added — Jim Ellis runs on Team Velocity (no dispatcher support) behind Akamai Bot Manager; "Hennessy Ford Lincoln" is the same physical store/backend as the existing Hennessy Ford Atlanta entry, just listed under a second marketing domain by CarGurus's directory.
 
 **Multi-brand / other (12):** ALM Cars (5 `overfuel` entries: Gwinnett/Kennesaw/MoG/Marietta/Roswell), ALM Mazda South (`overfuel`), Amazing Luxury Cars (generic DOM), Gravity Autos Atlanta (`overfuel`), Hennessy Auto Group (`cobalt_dom` + `progressive_scroll` — Lexus + Cadillac + JLR), Jim Ellis All Brands (`cobalt_dom`), Nalley Kia Multi-Brand (`cobalt_dom`), Rick Case Best Value (`cobalt_dom`)
 
@@ -391,6 +396,7 @@ PROXY_URL=...                   # optional: http://user:pass@host:port for resid
 - **Title parsing LLM fallback** — `_parse_title` in `dealer_scraper.py` falls back to a cached LLM title parser (`deepseek-v4-flash` via OpenRouter) when standard regex/substring matching fails to resolve a valid make/model. Cache stored in `.title_cache.json`. Uses a strict prompt format (`{"matched": false}`) to prevent force-mapping non-target vehicles. `_llm_model_valid_for_title()` post-validates every LLM result: (1) if the matched model has a powertrain qualifier (Hybrid/PHEV/Recharge), the source title must contain one too; (2) all non-powertrain words in the model name must appear in the title. This prevents cross-variant false positives (e.g. "Elantra Hybrid" title → "Tucson Hybrid" match).
 - **Dealer scraping is parallelized** — 5 sites concurrently via `ThreadPoolExecutor(max_workers=5)`. `cobalt` (XHR-intercept) and `audi_one` sites have 150s timeout; others 90s.
 - **`llm_extract` scraper** — LLM-guided universal extractor for sites that resist DOM/API strategies. Card extraction uses a 3-pass JS approach: (1) explicit card-level CSS selectors, (2) `[data-vin]` parent-walk requiring the ancestor to contain year-pattern + price + mileage text, (3) body-text fallback. Uses `innerText` not `outerHTML` for compactness. LLM prompt filters by make + year; model/trim gating handled by `_is_valid` downstream. Pagination via `_NEXT_PAGE_JS` next-link detection. LLM: `deepseek/deepseek-v4-flash` at ~$0.001/page. Timeout: 300s in dispatcher.
+  - The DOM-extraction JS caps at 100 cards per page-load (Python chunks them into groups of 20 for separate LLM calls). This matters for infinite-scroll/lazy-load sites where all inventory renders on one URL with no "next page" link to advance to (e.g. Akins Ford has 70+ vehicles on one page) — capping extraction at 20 (the old behavior) silently dropped everything past the first 20 cards since pagination never advances on such sites.
 - **`_add_used` coerce** uses `_int()` for price/mileage/year — handles decimal strings via `int(float(...))` to avoid stripping the decimal point into a 100x inflated value.
 - **dealerinspire_algolia:** All `dealerinspire_algolia` entries have been deactivated — app_ids are deprovisioned or belong to non-target brands (Mazda/Toyota). The type still exists in the dispatcher for future use if a live Algolia index is found.
 - **cobalt_dom pagination:** `_scrape_cobalt_dom_async` tracks `seen_ext_ids` (VIN or href-derived) across pages and breaks immediately when a page yields no new listings. This prevents an infinite loop on DDC sites whose `?start=N` param is silently ignored (e.g. Volvo dealers that redirect to a fixed URL).
