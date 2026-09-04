@@ -18,7 +18,9 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  const payload = history || [{ role: "user", content: question }];
+  const payload = Array.isArray(history) && history.length > 0
+    ? history
+    : [{ role: "user", content: question }];
 
   return new Promise<NextResponse>((resolve) => {
     const child = execFile(
@@ -28,7 +30,7 @@ export async function POST(req: NextRequest) {
       (err, stdout, stderr) => {
         if (err) {
           console.error("[query_agent] error:", stderr);
-          resolve(NextResponse.json({ error: "Query failed", detail: stderr }, { status: 500 }));
+          resolve(NextResponse.json({ error: "Query failed" }, { status: 500 }));
           return;
         }
         try {

@@ -271,6 +271,12 @@ export default function ListingDetail({ listing: l, onClose, onAction }: Props) 
           <p className="text-sm font-medium text-white mt-0.5">{l.accident_count != null ? String(l.accident_count) : "Unknown"}</p>
         </div>
 
+        {/* VIN — read-only */}
+        <div className="bg-zinc-900 rounded-lg p-3 col-span-3">
+          <p className="text-xs text-zinc-500">VIN</p>
+          <p className="text-sm font-medium text-white mt-0.5 font-mono">{l.vin ?? "Unknown"}</p>
+        </div>
+
         {/* vs market — read-only */}
         {l.fair_price && (
           <div className="bg-zinc-900 rounded-lg p-3 col-span-3">
