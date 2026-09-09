@@ -289,11 +289,13 @@ docker compose up -d db
 cd /path/to/carhunt && npm run dev    # http://localhost:3000
 
 # Expose dashboard publicly via Cloudflare quick tunnel (URL changes each run)
-cloudflared tunnel --url http://localhost:3000
-# Current tunnel: https://athletes-lines-parcel-episode.trycloudflare.com (ephemeral)
+cloudflared tunnel --protocol http2 --url http://localhost:3000
+# URL is ephemeral — a fresh one is printed each run. Prefer --protocol http2 over
+# the QUIC default; QUIC has been observed getting stuck in a reconnect loop on
+# some networks (UDP blocked/unstable) where HTTP2 (TCP) works fine.
 
-# Trigger a full refresh (scrape + enrich + score)
-curl -X POST http://localhost:3000/api/refresh
+# Trigger a full refresh (scrape + enrich + score) — needs Basic Auth credentials, see below
+curl -u "$DASHBOARD_USERNAME:$DASHBOARD_PASSWORD" -X POST http://localhost:3000/api/refresh
 # Or directly:
 cd agents && python3 orchestrator.py
 
@@ -317,7 +319,13 @@ OPENROUTER_API_KEY=...          # LLM: insight extraction, trim normalization, q
 AGENTS_DIR=/path/to/carhunt/agents
 AGENTS_PYTHON=/path/to/carhunt/agents/.venv/bin/python3
 PROXY_URL=...                   # optional: http://user:pass@host:port for residential proxy
+DASHBOARD_USERNAME=...          # required — HTTP Basic Auth in front of every page + API route
+DASHBOARD_PASSWORD=...          # required — see "Dashboard Auth" below
 ```
+
+**Dashboard Auth** (`proxy.ts`): the whole app (all pages and all `/api/*` routes) sits behind HTTP Basic Auth, checked against `DASHBOARD_USERNAME`/`DASHBOARD_PASSWORD`. Fails closed (500) if either env var is unset — the app never silently serves unauthenticated. Added because the dashboard is routinely exposed via a public Cloudflare quick tunnel; the tunnel hostname is randomly-generated but not actually secret (Certificate Transparency logs publish every `*.trycloudflare.com` cert the moment it's issued, and bots scrape CT logs specifically looking for exposed dev/tunnel servers). Uses a constant-time comparison (`timingSafeEqual` implemented by hand, not `crypto.timingSafeEqual`) and `atob()` instead of `Buffer`, since `proxy.ts` may run on the Edge runtime where Node-only APIs aren't available. Named `proxy.ts` (not `middleware.ts`) and exports a `proxy` function (not `middleware`) — Next.js 16 deprecated the `middleware` file/export convention in favor of `proxy`.
+
+**Cloudflare tunnel DNS troubleshooting:** if a fresh tunnel's hostname won't load in curl/browser but `dig <hostname>` resolves it fine (including via `dig @1.1.1.1` or other public resolvers), the tunnel is not actually broken — it's a stale negative (NXDOMAIN) entry cached by macOS's `mDNSResponder`, most likely left over from an earlier tunnel attempt that failed before DNS had propagated. `dig` bypasses the OS resolver cache; `curl`/browsers use it via `getaddrinfo()`. Fix: `dscacheutil -flushcache && killall -HUP mDNSResponder` (needs admin — from an agent without an interactive terminal, use `osascript -e 'do shell script "..." with administrator privileges'` to get a GUI password/Touch ID prompt instead of a blocking terminal `sudo` prompt). Don't waste time cycling through more fresh tunnels first — check `dig` vs `curl` to tell which failure mode you're actually in.
 
 ---
 
@@ -411,7 +419,7 @@ PROXY_URL=...                   # optional: http://user:pass@host:port for resid
 - **Orchestrator timeouts:** 60-minute watchdog; 5-minute cap per training phase; 5-minute cap per scoring phase.
 - **Anti-detection:** Browser UA rotates across Chrome 134–136 (macOS + Windows). Viewport randomizes across 5 sizes. Bot-detection check after each CarGurus/Cars.com page load.
 - **`analysis_agent.py` has no LLM.** Scores all unscored listings in a single batch using the stacked ensemble.
-- **`query_agent.py`** uses LLM (deepseek/deepseek-v4-flash via OpenRouter) for natural-language questions about the listing DB. `max_tokens=500` caps runaway responses.
+- **`query_agent.py`** uses LLM (deepseek/deepseek-v4-flash via OpenRouter) for natural-language questions about the listing DB. `max_tokens=500` caps runaway responses. The `SCHEMA` string hardcoded into the system prompt must be kept in sync with the actual `listings` columns by hand — it's not introspected from the DB, so a column (e.g. `vin`) can exist in the table and never be mentioned by the LLM if someone forgets to add it here. History messages passed in from the API are filtered to `role in {"user","assistant"}` before being forwarded to the LLM, so a client can't smuggle a `system`-role message into the conversation. `_query_db` calls `fetch_all(sql, params=None)` (not the default `params=()`) so psycopg2 skips `%`-style mogrification entirely — passing the default empty tuple instead would require escaping literal `%` characters (e.g. in `ILIKE '%foo%'`) by hand.
 - **Filter bar is client-side.** All filtering and sorting happens in-memory in Dashboard.tsx.
 - **Cars.com model slug** uses `re.sub(r"[^a-z0-9]+", "_", model.lower())` — all non-alphanumeric chars become underscores. Old `str.replace(' ', '_')` left hyphens intact, breaking hyphenated model names.
 - **`engine_filter` is source-aware** — bypassed for `carscom` when the model name itself contains the filter keyword (slug already scopes to the right variant). Always applied for CarGurus where the model page may include multiple engine variants.
