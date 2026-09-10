@@ -281,10 +281,17 @@ Type `/retrain` in Claude Code to run a broad market sweep and retrain the model
 
 ## Running Locally
 
+**Preferred: launchd-managed services** (survives crashes/kills automatically — see "Persistent Services" below):
 ```bash
-# Prerequisites: Docker running (Postgres runs in Docker)
-docker compose up -d db
+docker compose up -d db   # Postgres — not launchd-managed, start manually
+launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.carhunt.dashboard.plist
+launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.carhunt.tunnel.plist
+launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.carhunt.caffeinate.plist
+grep -o 'https://[a-zA-Z0-9.-]*\.trycloudflare\.com' /tmp/carhunt-tunnel.log | tail -1   # current tunnel URL
+```
 
+**Manual (ad-hoc / one-off testing):**
+```bash
 # Start the UI
 cd /path/to/carhunt && npm run dev    # http://localhost:3000
 
@@ -326,6 +333,38 @@ DASHBOARD_PASSWORD=...          # required — see "Dashboard Auth" below
 **Dashboard Auth** (`proxy.ts`): the whole app (all pages and all `/api/*` routes) sits behind HTTP Basic Auth, checked against `DASHBOARD_USERNAME`/`DASHBOARD_PASSWORD`. Fails closed (500) if either env var is unset — the app never silently serves unauthenticated. Added because the dashboard is routinely exposed via a public Cloudflare quick tunnel; the tunnel hostname is randomly-generated but not actually secret (Certificate Transparency logs publish every `*.trycloudflare.com` cert the moment it's issued, and bots scrape CT logs specifically looking for exposed dev/tunnel servers). Uses a constant-time comparison (`timingSafeEqual` implemented by hand, not `crypto.timingSafeEqual`) and `atob()` instead of `Buffer`, since `proxy.ts` may run on the Edge runtime where Node-only APIs aren't available. Named `proxy.ts` (not `middleware.ts`) and exports a `proxy` function (not `middleware`) — Next.js 16 deprecated the `middleware` file/export convention in favor of `proxy`.
 
 **Cloudflare tunnel DNS troubleshooting:** if a fresh tunnel's hostname won't load in curl/browser but `dig <hostname>` resolves it fine (including via `dig @1.1.1.1` or other public resolvers), the tunnel is not actually broken — it's a stale negative (NXDOMAIN) entry cached by macOS's `mDNSResponder`, most likely left over from an earlier tunnel attempt that failed before DNS had propagated. `dig` bypasses the OS resolver cache; `curl`/browsers use it via `getaddrinfo()`. Fix: `dscacheutil -flushcache && killall -HUP mDNSResponder` (needs admin — from an agent without an interactive terminal, use `osascript -e 'do shell script "..." with administrator privileges'` to get a GUI password/Touch ID prompt instead of a blocking terminal `sudo` prompt). Don't waste time cycling through more fresh tunnels first — check `dig` vs `curl` to tell which failure mode you're actually in.
+
+---
+
+## Persistent Services (launchd)
+
+The dev server, Cloudflare tunnel, and sleep-prevention (`caffeinate -s`) are managed as per-user `launchd` LaunchAgents rather than plain background shell processes. This was set up specifically because an AI coding agent's tracked background processes were observed being killed periodically (with zero trace in the system log, while the process that spawned them stayed alive continuously) — `launchd` jobs run independently of any coding-agent session, so they're immune to that failure mode, and `KeepAlive` auto-restarts them within seconds if they ever die for any other reason too.
+
+Plists live in `~/Library/LaunchAgents/` (outside the repo, machine-specific, not in git):
+- `com.carhunt.dashboard.plist` — `npm run dev`, logs to `/tmp/carhunt-dashboard.log`
+- `com.carhunt.tunnel.plist` — `cloudflared tunnel --protocol http2 --url http://localhost:3000`, logs to `/tmp/carhunt-tunnel.log`
+- `com.carhunt.caffeinate.plist` — `caffeinate -s`, no log (trivial process)
+
+All three: `RunAtLoad=true`, `KeepAlive=true`, `ThrottleInterval=5` (min seconds between restarts, avoids a crash-restart-crash tight loop). Postgres is **not** launchd-managed — it's a Docker container (`docker compose up -d db`), started manually since Docker Desktop itself needs to be running first.
+
+```bash
+# Check status (PID + last exit code; 0 = running/healthy)
+launchctl list | grep carhunt
+
+# Get the current tunnel URL (changes on every tunnel restart, e.g. after a launchd-triggered relaunch)
+grep -o 'https://[a-zA-Z0-9.-]*\.trycloudflare\.com' /tmp/carhunt-tunnel.log | tail -1
+
+# Restart one service (e.g. after editing cars.json or .env.local — dashboard needs a restart to pick up env changes)
+launchctl kickstart -k gui/$(id -u)/com.carhunt.dashboard
+
+# Stop a service entirely (won't come back until bootstrapped again)
+launchctl bootout gui/$(id -u)/com.carhunt.dashboard
+
+# Load a service (after bootout, or on a fresh machine)
+launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.carhunt.dashboard.plist
+```
+
+Note: `.env.local` changes require `launchctl kickstart -k` on the dashboard job to take effect — `KeepAlive` only restarts on unexpected exit, not on file changes.
 
 ---
 
