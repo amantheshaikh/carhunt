@@ -361,10 +361,15 @@ function JobBanner({ job, onDismiss }: { job: JobStatus | null; onDismiss: () =>
     }
     if (esRef.current) return;
     setLogLines([]);
-    const es = new EventSource("/api/logs/stream");
+    const es = new EventSource(new URL("/api/logs/stream", window.location.origin).toString());
     esRef.current = es;
     es.onmessage = (e) => {
-      const line = JSON.parse(e.data) as string;
+      let line: string;
+      try {
+        line = JSON.parse(e.data) as string;
+      } catch {
+        return; // skip malformed/truncated SSE chunk rather than crash the stream
+      }
       setLogLines((prev) => {
         const next = [...prev, line];
         return next.length > 500 ? next.slice(-500) : next;
