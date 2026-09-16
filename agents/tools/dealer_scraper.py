@@ -299,7 +299,7 @@ async def _scrape_cobalt_dom_async(inventory_url: str, brand: str,
                 if progressive_scroll:
                     await _scroll_progressive(page)
 
-                cards_data = await page.evaluate("""() => {
+                page_data = await page.evaluate("""() => {
                     // Build JSON-LD vehicle map (VIN → {price, mileage, url}).
                     // DDC sites like Dyer & Dyer embed full inventory in structured data while
                     // .price-value DOM elements only render for a subset of cards.
@@ -325,14 +325,15 @@ async def _scrape_cobalt_dom_async(inventory_url: str, brand: str,
                                 jldMap[vin] = {
                                     price: rawPrice != null ? String(Math.round(parseFloat(rawPrice))) || null : null,
                                     mileage: rawMiles != null ? String(Math.round(parseFloat(rawMiles))) || null : null,
-                                    url: v.url || ''
+                                    url: v.url || '',
+                                    name: v.name || ''
                                 };
                             }
                         } catch(e) {}
                     }
 
                     const cards = [...document.querySelectorAll('li.vehicle-card')];
-                    return cards.map(card => {
+                    const cardResults = cards.map(card => {
                         // Title: first line matching "YYYY Make ..." pattern
                         // Strip common prefixes like "Used 2025 ..." before year check
                         const bodyText = card.innerText || '';
@@ -371,7 +372,11 @@ async def _scrape_cobalt_dom_async(inventory_url: str, brand: str,
 
                         return { titleLine, vin, mileage, price, href, isCpo };
                     });
+                    return { cards: cardResults, jld: jldMap };
                 }""")
+
+                cards_data = page_data.get("cards") or []
+                jld_map = page_data.get("jld") or {}
 
                 if not cards_data:
                     break
@@ -421,6 +426,42 @@ async def _scrape_cobalt_dom_async(inventory_url: str, brand: str,
 
                 if skipped:
                     print(f"    [cobalt_dom] page start={start}: {len(inventory) - prev_count} parsed, {skipped} skipped (no title/price/vin-dup)", flush=True)
+
+                # Recover vehicles whose card was still a loading-skeleton placeholder
+                # (no VIN/price extractable from the DOM yet) but whose full data is
+                # already present in the page's JSON-LD structured data, independent
+                # of DOM render state. Seen on North Point Volvo's certified-inventory
+                # page, where cards lazy-load and the fixed wait isn't always enough —
+                # ~90% of that page's cards were silently dropped before this existed.
+                recovered = 0
+                for jvin, jentry in jld_map.items():
+                    if jvin in seen_vins or jvin in seen_ext_ids:
+                        continue
+                    jname = (jentry.get("name") or "").strip()
+                    jprice = jentry.get("price")
+                    if not jname or not jprice:
+                        continue
+                    year_s, make, model, trim = _parse_title(jname)
+                    if not year_s or not make or not model:
+                        continue
+                    seen_ext_ids.add(jvin)
+                    seen_vins.add(jvin)
+                    jmileage = int(jentry["mileage"]) if jentry.get("mileage") else None
+                    jhref = jentry.get("url") or inventory_url
+                    is_cpo = is_cpo_page or "certified" in jhref.lower()
+                    inventory.append(_make_listing(
+                        brand, jvin,
+                        vin=jvin, make=make, model=model, trim=trim or None,
+                        year=int(year_s) if year_s else None, body_type=None,
+                        mileage=jmileage, price=int(jprice),
+                        listing_url=jhref, photos_url=[],
+                        dealer_name=brand,
+                        insights={"cpo": is_cpo} if is_cpo else None,
+                        raw={"title": jname, "vin": jvin, "price": jprice, "mileage": jmileage, "source": "jsonld_recovery"},
+                    ))
+                    recovered += 1
+                if recovered:
+                    print(f"    [cobalt_dom] page start={start}: {recovered} recovered from JSON-LD (skeleton cards)", flush=True)
 
                 # Stop if no new listings appeared (pagination not supported or last page)
                 if len(inventory) == prev_count:
