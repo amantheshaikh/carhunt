@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { execFile } from "child_process";
-import fs from "fs";
+import { getAgentsConfig, isPythonAvailable } from "@/lib/agents";
 
 export async function POST(req: NextRequest) {
   const { question, history } = await req.json();
@@ -8,10 +8,9 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "No question or history provided" }, { status: 400 });
   }
 
-  const agentsDir = process.env.AGENTS_DIR ?? "agents";
-  const venvPython = process.env.AGENTS_PYTHON ?? "python3";
+  const { agentsDir, venvPython } = getAgentsConfig();
 
-  if (!fs.existsSync(venvPython)) {
+  if (!isPythonAvailable(venvPython)) {
     return NextResponse.json(
       { error: "Python venv not found. Run: cd agents && python3 -m venv .venv && .venv/bin/pip install -r ../requirements.txt" },
       { status: 500 }

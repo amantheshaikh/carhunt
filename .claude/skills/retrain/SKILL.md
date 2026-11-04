@@ -14,7 +14,7 @@ Retrain the CarHunt ML fair-price models. Run the following two steps in sequenc
 Run the training collector in `--broad` mode. This scrapes **CarGurus, Cars.com, Carvana, and CarMax** nationwide (radius=2500mi, no geographic constraint) across 16 stages covering model years **2023–2026 with no price ceiling** on high-trim stages. This fills in the full depreciation curve that the ML model needs.
 
 ```bash
-cd /Users/amanshaikh/Personal/carhunt/agents && /Users/amanshaikh/Personal/carhunt/agents/.venv/bin/python3 training_collector.py --broad
+cd agents && .venv/bin/python3 training_collector.py --broad
 ```
 
 This takes 15–30 minutes. Stream the output so the user sees progress per stage.
@@ -24,7 +24,7 @@ This takes 15–30 minutes. Stream the output so the user sees progress per stag
 After collection completes, retrain all six per-model HistGradientBoostingRegressor models:
 
 ```bash
-cd /Users/amanshaikh/Personal/carhunt/agents && /Users/amanshaikh/Personal/carhunt/agents/.venv/bin/python3 -c "
+cd agents && .venv/bin/python3 -c "
 from dotenv import load_dotenv
 load_dotenv('../.env.local')
 from tools.price_model import train
@@ -50,5 +50,5 @@ Note any models with < 30 rows that fell back to the global estimator — those 
 Tell the user to click **Refresh Now** in the dashboard, or run the orchestrator directly to rescore all active listings with the updated model:
 
 ```bash
-cd /Users/amanshaikh/Personal/carhunt/agents && /Users/amanshaikh/Personal/carhunt/agents/.venv/bin/python3 orchestrator.py
+cd agents && .venv/bin/python3 orchestrator.py
 ```

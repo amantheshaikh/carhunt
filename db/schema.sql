@@ -21,7 +21,7 @@ CREATE TABLE IF NOT EXISTS listings (
   listing_date DATE,
   first_seen_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   last_seen_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-  status TEXT NOT NULL DEFAULT 'new',    -- 'new' | 'active' | 'dismissed' | 'contacted' | 'sold' | 'expired' | 'purchased'
+  status TEXT NOT NULL DEFAULT 'new',    -- 'new' | 'active' | 'dismissed'
   missed_count INT NOT NULL DEFAULT 0,
   snoozed_until TIMESTAMPTZ,
   title_status TEXT,                     -- 'clean' | 'salvage' | 'rebuilt' | 'flood' | 'lemon' | 'unknown'
@@ -76,22 +76,9 @@ CREATE TABLE IF NOT EXISTS user_settings (
   max_price INT NOT NULL DEFAULT 27000,
   max_mileage INT NOT NULL DEFAULT 30000,
   min_year INT NOT NULL DEFAULT 2023,
+  max_year INT,
   body_types TEXT[] NOT NULL DEFAULT ARRAY['sedan', 'suv', 'crossover'],
-  makes TEXT[] NOT NULL DEFAULT ARRAY['Toyota', 'Volkswagen', 'Nissan', 'Subaru', 'Honda', 'Hyundai', 'Mazda', 'Chevrolet', 'Kia'],
-  inquiry_template TEXT NOT NULL DEFAULT 'Hi,
-
-I''m interested in your {year} {make} {model} listed at {price} (VIN: {vin}).
-
-Could you confirm:
-1. Is this vehicle still available?
-2. What is the lowest OTD (out-the-door) price including all fees?
-3. Can you confirm the title is clean with no accidents on record?
-4. Are there any known issues or recent service records available?
-
-I''m looking to move quickly. Best way to reach me is email.
-
-Thanks,
-Aman'
+  makes TEXT[] NOT NULL DEFAULT ARRAY['Toyota', 'Volkswagen', 'Nissan', 'Subaru', 'Honda', 'Hyundai', 'Mazda', 'Chevrolet', 'Kia']
 );
 
 CREATE TABLE IF NOT EXISTS dealer_sites (
@@ -100,13 +87,45 @@ CREATE TABLE IF NOT EXISTS dealer_sites (
   name TEXT NOT NULL,
   website_url TEXT NOT NULL,
   inventory_url TEXT,
+  new_inventory_url TEXT,
   phone TEXT,
   city TEXT,
   distance_miles NUMERIC,
+  scraper_config JSONB,
   is_active BOOLEAN NOT NULL DEFAULT true,
   last_scraped_at TIMESTAMPTZ,
   added_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   UNIQUE(website_url)
+);
+
+CREATE TABLE IF NOT EXISTS price_training_data (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  make TEXT NOT NULL,
+  model TEXT NOT NULL,
+  year INT NOT NULL,
+  mileage INT,
+  price INT NOT NULL,
+  condition TEXT DEFAULT 'used',
+  trim TEXT,
+  source TEXT,
+  collected_at TIMESTAMPTZ DEFAULT now(),
+  listing_url TEXT,
+  powertrain TEXT,
+  drivetrain TEXT,
+  cpo BOOLEAN DEFAULT false,
+  UNIQUE(source, listing_url)
+);
+
+CREATE TABLE IF NOT EXISTS background_jobs (
+  id SERIAL PRIMARY KEY,
+  job_type TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'running',
+  stage_current INT,
+  stage_total INT,
+  stage_label TEXT,
+  rows_added INT DEFAULT 0,
+  started_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  completed_at TIMESTAMPTZ
 );
 
 CREATE TABLE IF NOT EXISTS refresh_log (
@@ -118,7 +137,6 @@ CREATE TABLE IF NOT EXISTS refresh_log (
   source_results JSONB,
   source_errors JSONB
 );
-
 
 -- Insert default settings row if not exists
 INSERT INTO user_settings (id) VALUES (gen_random_uuid())

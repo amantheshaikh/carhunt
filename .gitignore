@@ -9,6 +9,7 @@ agents/.venv/
 __pycache__/
 *.pyc
 *.pkl
+!agents/tools/price_model_*.pkl
 *.pth
 
 # Environment

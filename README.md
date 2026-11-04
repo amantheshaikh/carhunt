@@ -1,146 +1,141 @@
 # CarHunt
 
-Personal used-car deal tracker for the Atlanta metro area. Scrapes CarGurus, Cars.com, and local dealer websites for target vehicle configurations, scores each listing with an ML fair-price model, and surfaces the best deals in a Next.js dashboard.
+Used-car deal tracker powered by machine learning and automated web scraping. Scrapes CarGurus, Cars.com, and local dealer websites for target vehicle configurations, scores each listing with a stacked ensemble ML fair-price model, and surfaces the best deals in an authenticated Next.js dashboard.
 
 ---
 
 ## Prerequisites
 
+- **Docker Desktop** (for PostgreSQL)
 - **Node.js** v18+ and npm
 - **Python** 3.11+
-- **Docker Desktop** (for PostgreSQL)
+- An API key from [OpenRouter](https://openrouter.ai) (uses `deepseek/deepseek-v4-flash` for insights, trim normalization, and chat queries)
 
 ---
 
-## First-time setup
+## Quickstart (Under 5 Minutes)
 
-### 1. Start the database
+### 1. Run the setup script
 
-```bash
-docker compose up -d
-```
-
-This starts a PostgreSQL container on port 5432 and runs `db/schema.sql` automatically on first launch.
-
-### 2. Set your API keys
-
-Copy `.env.example` to `.env.local` and fill in your keys:
+Clone the repo and run:
 
 ```bash
-cp .env.example .env.local
+./setup.sh
 ```
 
-Edit `.env.local`:
+This single command:
+1. Verifies prerequisites (Docker, Node, Python).
+2. Generates `.env.local` from `.env.example`.
+3. Starts PostgreSQL in Docker and automatically sets up tables and dealer seeds.
+4. Installs Node.js dependencies (`npm install`).
+5. Creates a Python virtual environment in `agents/.venv` and installs dependencies + Playwright Chromium.
 
-```
-DATABASE_URL=postgresql://carhunt:carhunt@localhost:5432/carhunt
+### 2. Add your OpenRouter API key
+
+Open `.env.local` and add your OpenRouter key:
+
+```env
 OPENROUTER_API_KEY=your_key_here
-AGENTS_DIR=/path/to/carhunt/agents
-AGENTS_PYTHON=/path/to/carhunt/agents/.venv/bin/python3
 ```
 
-Get an OpenRouter key at [openrouter.ai](https://openrouter.ai). The app uses `deepseek/deepseek-v4-flash` for LLM calls (insight extraction, trim normalization, refresh summaries).
+*(Optional: adjust `DASHBOARD_USERNAME` or `DASHBOARD_PASSWORD` if you'd like custom login credentials.)*
 
-### 3. Install Node dependencies
-
-```bash
-npm install
-```
-
-### 4. Set up Python environment
-
-```bash
-cd agents
-python3 -m venv .venv
-source .venv/bin/activate
-pip install -r ../requirements.txt
-playwright install chromium
-cd ..
-```
-
----
-
-## Running the app
-
-### Dashboard
+### 3. Launch the dashboard
 
 ```bash
 npm run dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000).
+Open [http://localhost:3000](http://localhost:3000) and log in:
+- **Username:** `admin` (or what you set in `.env.local`)
+- **Password:** `carhunt`
 
-### Running a refresh
-
-Click **Refresh Now** in the dashboard, or run directly:
-
-```bash
-cd agents
-source .venv/bin/activate
-python orchestrator.py
-```
-
-This runs the full pipeline: scrape all sources → refresh price cache → retrain ML model → score all listings. Takes 5–15 minutes depending on site response times and the number of new listings.
-
-### Forcing a scrape (bypass 6h cooldown)
-
-```bash
-python agents/sourcing_agent.py --force
-```
-
-### Retraining the ML model without re-scraping
-
-```bash
-cd agents && python3 -c "
-from dotenv import load_dotenv; load_dotenv('../.env.local')
-from tools.price_model import train; train()
-"
-```
+Pre-trained fair price models (`agents/tools/price_model_*.pkl`) are included out-of-the-box, so vehicles will be scored immediately when scraped!
 
 ---
 
-## Project structure
+## Running a Refresh
+
+To fetch listings and score them:
+- Click **"Refresh Now"** in the dashboard header, or
+- Run directly from the command line:
+
+```bash
+cd agents && source .venv/bin/activate && python orchestrator.py
+```
+
+The refresh pipeline runs in 4 stages:
+1. **Sourcing** (`sourcing_agent.py`) — Scrapes CarGurus, Cars.com, and dealer sites, validates trims, and extracts detail page insights.
+2. **Price Cache** — Rebuilds market median benchmarks.
+3. **Model Retrain** — Refits the stacked ensemble if new broad training data exists.
+4. **Scoring** (`analysis_agent.py`) — Evaluates all unscored listings using the ML model.
+
+Takes ~5–15 minutes depending on site response times.
+
+---
+
+## Customizing for Your City & Vehicles
+
+### 1. Changing Your Location (ZIP Code & Radius)
+
+Search parameters are stored in the `user_settings` database table. To change your ZIP code or search radius:
+
+```bash
+docker compose exec db psql -U carhunt -d carhunt -c "UPDATE user_settings SET zip_code = '30328', radius_miles = 50;"
+```
+
+CarGurus and Cars.com scrapers will automatically use your new ZIP code and search radius on the next refresh.
+
+### 2. Changing Tracked Vehicles
+
+Target vehicles and trim allowlists are configured in [`agents/cars.json`](agents/cars.json).
+
+Each entry defines:
+- `make` and `model`
+- `cargurus_id` (model page ID) and `cargurus_search_path`
+- `min_year` / `max_year`
+- `trims` (allowed trims to track)
+- `msrp` table (used for trim-premium calculations)
+
+---
+
+## Project Structure
 
 ```
 carhunt/
 ├── app/                        # Next.js App Router
-│   ├── api/                    # API routes (listings, refresh, query, settings, logs)
+│   ├── api/                    # REST endpoints (listings, refresh, query, logs)
 │   └── page.tsx                # Dashboard entry point
-├── components/                 # React components (Dashboard, ListingCard, ListingDetail)
-├── lib/                        # Shared TypeScript (DB client, types, vehicle-tags)
-├── agents/                     # Python scraping + ML pipeline
-│   ├── orchestrator.py         # Entry point: Sourcing → Price cache → Retrain → Score
-│   ├── sourcing_agent.py       # Scrapes all sources, diffs against DB, enriches new listings
-│   ├── analysis_agent.py         # Scores listings with stacked ensemble → listing_scores
-│   ├── query_agent.py          # Natural-language query CLI (spawned by /api/query)
-│   ├── training_collector.py   # Collects broad market data for ML training
-│   ├── backfill_training.py    # Targeted fix/rescrape of training data for one model
-│   ├── cars.json               # Target vehicles + trim allowlists
-│   └── tools/
-│       ├── scrapers.py         # Playwright scrapers: CarGurus, Cars.com
-│       ├── dealer_scraper.py   # Playwright + API scraper for dealer websites
-│       ├── db.py               # psycopg2 helpers
-│       ├── scoring.py          # score_listing() + drivetrain/powertrain detection
-│       ├── price_model.py      # Stacked ensemble fair-price estimator (GB + KNN + Ridge)
-│       ├── base_trims.py       # Trim allowlist + canonical_trim normalization (LLM fallback)
-│       ├── log_tee.py          # stdout/stderr tee → /tmp/carhunt-refresh.log
-│       └── job_tracker.py      # Job progress tracking for dashboard SSE stream
+├── components/                 # React UI components (Dashboard, ListingCard, Detail, Chat)
+├── lib/                        # Shared TypeScript helpers (db client, agents config, vehicle tags)
 ├── db/
-│   └── schema.sql              # PostgreSQL schema
-├── docker-compose.yml          # PostgreSQL container
-└── .env.local                  # API keys and config (not committed)
+│   ├── schema.sql              # PostgreSQL schema (tables, constraints, indexes)
+│   └── seed_dealers.sql        # Curated dealer configurations and scrapers
+├── agents/                     # Python scraping + ML pipeline
+│   ├── orchestrator.py         # Refresh pipeline entry point
+│   ├── sourcing_agent.py       # Scrapers coordinator & listing enrichment
+│   ├── analysis_agent.py       # Stacked ensemble scoring engine
+│   ├── query_agent.py          # Natural-language SQL chat assistant
+│   ├── cars.json               # Vehicle configuration & trim allowlists
+│   └── tools/
+│       ├── price_model_*.pkl   # Pre-trained stacked ensemble model weights
+│       ├── price_model.py      # HistGradientBoosting + KNN + Ridge stacked estimator
+│       ├── scrapers.py         # Playwright scrapers (CarGurus, Cars.com)
+│       └── dealer_scraper.py   # Dealer inventory scrapers
+├── setup.sh                    # One-command automated onboarding script
+├── docker-compose.yml          # PostgreSQL database container
+└── .env.example                # Sample environment configuration
 ```
 
 ---
 
-## How the Value Score works
+## How the Value Score Works
 
-Each listing is scored 0–100 using a per-model z-score sigmoid:
-`sigmoid((fair_price − listing_price) / residual_std × 0.94)` (where `residual_std` has a minimum floor of $600.0). k=0.94 calibrates so 1σ below fair ≈ 72 (Great Deal) and 2σ ≈ 88 (Exceptional Deal).
+Each listing is scored 0–100 using a per-model sigmoid over price residuals:
 
-The fair price comes from a **Stacked Ensemble** (`HistGradientBoostingRegressor` + `KNeighborsRegressor` + `Ridge`) trained per vehicle on broad market data. Features: year, log-transformed mileage (`log1p(mileage)`), trim premium (dollar premium relative to base trim MSRP), drivetrain (FWD/AWD), powertrain (gas/hybrid/PHEV), and CPO status.
+$$\text{score} = \sigma\left(\frac{\text{fair\_price} - \text{listing\_price}}{\text{residual\_std}} \times 0.94\right) \times 100$$
 
-Drivetrain is resolved in priority order: trim-level override → model/year override → keyword detection from listing text and URL slug (hyphens converted to spaces, so `/tiguan-2-0t-se-fwd/` correctly yields FWD).
+A score of ~72 represents ~1 standard deviation below fair market price (Great Deal), and 88+ represents ~2 standard deviations below market (Exceptional Deal).
 
 | Score | Category |
 |---|---|
@@ -150,18 +145,15 @@ Drivetrain is resolved in priority order: trim-level override → model/year ove
 | 45–58 | Fair Price |
 | < 40 | Poor Value |
 
+The fair price is computed using a **Stacked Ensemble** (`HistGradientBoostingRegressor` + `KNeighborsRegressor` + `Ridge`) trained on vehicle age, log mileage, trim MSRP premium, drivetrain (FWD/AWD), powertrain (gas/hybrid/EV), and CPO status.
+
 ---
 
 ## Troubleshooting
 
-**Scraper returns 0 results for a source**
-- Check `refresh_log.source_errors` in the DB or dashboard logs
-- Set `headless=True` → `headless=False` in `agents/tools/scrapers.py` to watch the browser live
-- Residential IP is the main defence against bot detection — VPNs may cause blocks
-
-**Dashboard shows "No listings here yet"**
-- Run `python agents/orchestrator.py` manually to populate the DB
-
-**Database connection error**
-- Make sure Docker is running: `docker compose up -d`
-- Check the container: `docker compose ps`
+- **Scraper returns 0 results:**
+  CarGurus and Cars.com use bot detection. Running from your home residential IP is the most effective approach. Avoid data-center VPNs during scraping.
+- **Database connection error:**
+  Ensure Docker is running: `docker compose ps`. Restart if needed: `docker compose up -d`.
+- **Resetting your local database:**
+  To start completely fresh: `docker compose down -v && docker compose up -d`.

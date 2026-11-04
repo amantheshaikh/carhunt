@@ -132,16 +132,6 @@ export default function ListingCard({ listing: l, selected, onSelect, onAction, 
               )}
             </div>
           )}
-
-          {l.dealer_phone && (
-            <a
-              href={`tel:${l.dealer_phone}`}
-              onClick={(e) => e.stopPropagation()}
-              className="text-xs text-blue-400 hover:text-blue-300 mt-1 inline-block"
-            >
-              {l.dealer_phone}
-            </a>
-          )}
         </div>
 
         {/* Deal category + days */}

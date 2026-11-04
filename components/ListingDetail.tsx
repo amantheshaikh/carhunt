@@ -111,8 +111,6 @@ export default function ListingDetail({ listing: l, onClose, onAction }: Props) 
     if (e.key === "Escape") { setEditingField(null); }
   };
 
-  // Removed contact and note handling
-
   return (
     <div className="p-6 space-y-6">
       {/* Header */}

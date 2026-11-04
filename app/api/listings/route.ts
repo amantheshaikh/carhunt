@@ -8,9 +8,7 @@ export async function GET(req: NextRequest) {
 
   const statusFilter: Record<string, string[]> = {
     active: ["new", "active"],
-    contacted: ["contacted"],
     dismissed: ["dismissed"],
-    purchased: ["purchased"],
   };
 
   const statuses = statusFilter[status] ?? ["new", "active"];

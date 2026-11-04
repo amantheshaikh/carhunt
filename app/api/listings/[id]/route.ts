@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { query, queryOne } from "@/lib/db";
 import type { Listing } from "@/lib/types";
 import { spawn } from "child_process";
-import fs from "fs";
+import { getAgentsConfig, isPythonAvailable } from "@/lib/agents";
 
 export async function GET(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
@@ -61,9 +61,8 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
   if (editedScoreField) {
     await query("DELETE FROM listing_scores WHERE listing_id = $1", [id]);
     await query("UPDATE listings SET status = 'new' WHERE id = $1 AND status = 'active'", [id]);
-    const agentsDir = process.env.AGENTS_DIR ?? "agents";
-    const venvPython = process.env.AGENTS_PYTHON ?? "python3";
-    if (fs.existsSync(venvPython)) {
+    const { agentsDir, venvPython } = getAgentsConfig();
+    if (isPythonAvailable(venvPython)) {
       const child = spawn(venvPython, ["-u", "analysis_agent.py"], {
         cwd: agentsDir,
         detached: true,

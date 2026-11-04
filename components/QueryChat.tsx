@@ -10,9 +10,9 @@ interface Message {
 
 const SUGGESTIONS = [
   "Which cars did I dismiss under $24k?",
-  "What's the highest-scored listing I haven't contacted?",
+  "What's the highest-scored listing available?",
   "Show me all new cars in the pipeline",
-  "Which dealers have I contacted?",
+  "Which models have the best value score?",
 ];
 
 export default function QueryChat() {
@@ -149,7 +149,7 @@ export default function QueryChat() {
                 ref={inputRef}
                 value={input}
                 onChange={(e) => setInput(e.target.value)}
-                placeholder="e.g. Which Toyotas have I not contacted yet?"
+                placeholder="e.g. Which hybrid SUVs have the highest value score?"
                 disabled={loading}
                 className="flex-1 px-3 py-2 text-sm bg-zinc-800 border border-zinc-700 rounded-lg text-zinc-200 placeholder-zinc-600 focus:outline-none focus:border-zinc-500 disabled:opacity-50"
               />

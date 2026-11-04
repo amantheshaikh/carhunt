@@ -372,14 +372,13 @@ Note: `.env.local` changes require `launchctl kickstart -k` on the dashboard job
 
 | Table | Purpose |
 |---|---|
-| `listings` | All scraped listings (active, expired, contacted, purchased); includes `user_notes TEXT` for personal notes |
+| `listings` | All scraped listings (active, dismissed); includes `user_notes TEXT` for personal notes |
 | `listing_scores` | Stacked ensemble: `value_score` (0–100), `fair_price`, `shap_values` (JSONB with per-estimator predictions), `scored_at` |
 | `market_price_cache` | Median prices per (make, model, year, mileage_bucket) |
 | `price_training_data` | Broader market data for ML training (includes `powertrain`, `drivetrain`, `cpo` columns) |
 | `dealer_sites` | Dealer URLs + `last_scraped_at` cooldown (6h) + `is_active` + `scraper_config` JSONB |
 | `user_settings` | Search params (zip, radius, max_price, max_mileage, min_year, max_year, allowed_models) |
 | `refresh_log` | One row per refresh run — timing + per-source stats + LLM summary |
-| `contact_log` | Contact events and notes per listing |
 | `watchlist` | Saved/favorited listings with `last_price` for price-drop tracking |
 
 > `db/schema.sql` is the initial schema. The running DB is extended via ALTER TABLE migrations; schema.sql may lag.
@@ -434,7 +433,7 @@ Note: `.env.local` changes require `launchctl kickstart -k` on the dashboard job
 
 ## Development Notes
 
-- **Status system:** `new` → `active` → `contacted` → `purchased`. `dismissed` = user-removed. Listings are **never** auto-dismissed by score or missed scrapes.
+- **Status system:** `new` → `active` (visible on dashboard). `dismissed` = user-removed. Listings are **never** auto-dismissed by score or missed scrapes.
 - **No auto-sold:** Scraper never marks listings as sold. User controls this via "Mark Expired".
 - **Mileage validation:** Two gates — (1) hard cap: `mileage > 50,000` → reject (all conditions incl. CPO); (2) rate check: `mileage / years_old > 14,000` → reject for non-CPO (rental/fleet heuristic). `max_mileage=50_000` in `run()`; rate check is CPO-exempt.
 - **Detail-page enrichment** runs concurrently (3 pages at a time) with a 10-minute total session cap. CarGurus and Cars.com require enrichment for history parsing, while dealer sites optionally run enrichment for qualitative insights. LLM insight extraction runs in a background thread per listing (timeout=15s).
